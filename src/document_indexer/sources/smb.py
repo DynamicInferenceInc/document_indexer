@@ -64,6 +64,18 @@ class SmbprotocolRemote:
         )
         self._registered = False
 
+    def _session_kwargs(self) -> dict[str, object]:
+        username = self._settings.username
+        if self._settings.domain:
+            username = f"{self._settings.domain}\\{username}"
+        return {
+            "username": username,
+            "password": self._settings.password.get_secret_value(),
+            "port": self._settings.port,
+            "connection_timeout": self._settings.timeout_sec,
+            "auth_protocol": "ntlm",
+        }
+
     def _ensure_session(self) -> None:
         try:
             import smbclient
@@ -74,16 +86,7 @@ class SmbprotocolRemote:
             ) from exc
         if self._registered:
             return
-        username = self._settings.username
-        if self._settings.domain:
-            username = f"{self._settings.domain}\\{username}"
-        smbclient.register_session(
-            self._settings.server,
-            username=username,
-            password=self._settings.password.get_secret_value(),
-            port=self._settings.port,
-            connection_timeout=self._settings.timeout_sec,
-        )
+        smbclient.register_session(self._settings.server, **self._session_kwargs())
         self._registered = True
 
     def list_files(self) -> dict[str, RemoteFileMeta]:
@@ -91,8 +94,9 @@ class SmbprotocolRemote:
         import smbclient
 
         listed: dict[str, RemoteFileMeta] = {}
+        kwargs = self._session_kwargs()
         try:
-            for dirpath, _dirnames, filenames in smbclient.walk(self._root):
+            for dirpath, _dirnames, filenames in smbclient.walk(self._root, **kwargs):
                 for name in filenames:
                     if name.startswith("."):
                         continue
@@ -100,7 +104,7 @@ class SmbprotocolRemote:
                     relative = _relative_posix(full, self._root)
                     if relative is None:
                         continue
-                    stat_result = smbclient.stat(full)
+                    stat_result = smbclient.stat(full, **kwargs)
                     listed[relative] = RemoteFileMeta(
                         size=int(stat_result.st_size),
                         mtime=float(stat_result.st_mtime),
@@ -117,7 +121,7 @@ class SmbprotocolRemote:
 
         full = _join_unc(self._root, relative.replace("/", "\\"))
         try:
-            stat_result = smbclient.stat(full)
+            stat_result = smbclient.stat(full, **self._session_kwargs())
         except Exception as exc:
             raise SmbListingError(f"SMB stat failed for {relative}: {exc}") from exc
         return RemoteFileMeta(size=int(stat_result.st_size), mtime=float(stat_result.st_mtime))
@@ -127,8 +131,9 @@ class SmbprotocolRemote:
         import smbclient
 
         full = _join_unc(self._root, relative.replace("/", "\\"))
-        with smbclient.open_file(full, mode="rb") as remote, dest.open("wb") as local:
-            shutil.copyfileobj(remote, local, length=_HASH_CHUNK)
+        with smbclient.open_file(full, mode="rb", **self._session_kwargs()) as remote:
+            with dest.open("wb") as local:
+                shutil.copyfileobj(remote, local, length=_HASH_CHUNK)
 
 
 class SmbStagingSource:
