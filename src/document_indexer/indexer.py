@@ -68,7 +68,7 @@ class DocumentIndexer:
             self._settings.qdrant.url,
             self._settings.qdrant.collection,
         )
-        self._core.reindex(str(root))
+        self._core.index(str(root))
         logger.info("One-shot reindex complete path=%s", root)
 
     def run(self) -> None:
@@ -84,7 +84,7 @@ class DocumentIndexer:
             self._settings.source.kind,
         )
         try:
-            self._core.reindex(str(root))
+            self._core.index(str(root))
         except Exception:
             logger.exception("Initial reindex failed for %s", root)
             if self._stop.is_set():
@@ -126,10 +126,10 @@ class DocumentIndexer:
         if not changes:
             return
         try:
-            self._core.apply_changes(str(self._source.local_root()), changes)
+            self._core.index(str(self._source.local_root()), changes)
         except Exception:
             logger.exception(
-                "Indexer.apply_changes failed for %s",
+                "Indexer.index failed for %s",
                 self._source.local_root(),
             )
 

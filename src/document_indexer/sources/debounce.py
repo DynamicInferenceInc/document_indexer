@@ -58,10 +58,10 @@ class DebouncedReindex:
                 self._watch_path,
             )
             try:
-                self._indexer.apply_changes(self._watch_path, changes)
+                self._indexer.index(self._watch_path, changes)
             except Exception:
                 logger.exception(
-                    "Indexer.apply_changes failed for %s",
+                    "Indexer.index failed for %s",
                     self._watch_path,
                 )
         with self._lock:

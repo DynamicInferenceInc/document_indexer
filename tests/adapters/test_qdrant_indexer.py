@@ -53,7 +53,7 @@ def test_qdrant_indexer_indexes_reader_chunks(tmp_path: Path) -> None:
     )
     indexer._client = client
 
-    indexer.reindex(str(docs))
+    indexer.index(str(docs))
 
     client.delete_collection.assert_not_called()
     client.create_collection.assert_called_once()
@@ -109,7 +109,7 @@ def test_qdrant_indexer_stores_one_table_point_and_aggregates_parts(
     )
     indexer._client = client
 
-    indexer.reindex(str(docs))
+    indexer.index(str(docs))
 
     points = client.upsert.call_args.kwargs["points"]
     assert len(points) == 1
@@ -144,7 +144,7 @@ def test_qdrant_indexer_filters_markup_only_chunks(tmp_path: Path) -> None:
     )
     indexer._client = client
 
-    indexer.reindex(str(docs))
+    indexer.index(str(docs))
 
     points = client.upsert.call_args.kwargs["points"]
     assert len(points) == 1
@@ -200,7 +200,7 @@ def test_qdrant_indexer_skips_disallowed_extensions(tmp_path: Path) -> None:
     )
     indexer._client = client
 
-    indexer.reindex(str(docs))
+    indexer.index(str(docs))
 
     points = client.upsert.call_args.kwargs["points"]
     sources = {point.payload["source_path"] for point in points}
@@ -224,7 +224,7 @@ def test_qdrant_indexer_skips_empty_reader_result(tmp_path: Path) -> None:
         document_reader=EmptyReader(),
     )
     indexer._client = client
-    indexer.reindex(str(docs))
+    indexer.index(str(docs))
     client.upsert.assert_not_called()
     client.create_collection.assert_not_called()
 
@@ -247,7 +247,7 @@ def test_reindex_skips_unchanged_files_without_wipe(tmp_path: Path) -> None:
         document_reader=FakeReader(),
     )
     indexer._client = client
-    indexer.reindex(str(docs))
+    indexer.index(str(docs))
 
     client.delete_collection.assert_not_called()
     client.upsert.assert_not_called()
@@ -270,7 +270,7 @@ def test_reindex_deduplicates_identical_files(tmp_path: Path) -> None:
         document_reader=FakeReader(),
     )
     indexer._client = client
-    indexer.reindex(str(docs))
+    indexer.index(str(docs))
 
     points = client.upsert.call_args.kwargs["points"]
     assert {point.payload["source_path"] for point in points} == {"a.md"}
@@ -295,7 +295,7 @@ def test_reindex_removes_stale_qdrant_paths(tmp_path: Path) -> None:
         document_reader=FakeReader(),
     )
     indexer._client = client
-    indexer.reindex(str(docs))
+    indexer.index(str(docs))
 
     client.delete_collection.assert_not_called()
     delete_filter = client.delete.call_args.kwargs["points_selector"].filter.must[0]
@@ -414,7 +414,7 @@ def test_apply_changes_upserts_one_file_without_recreating_collection(tmp_path: 
         document_reader=FakeReader(),
     )
     indexer._client = client
-    indexer.apply_changes(str(docs), [FsChange("upsert", "guide.md")])
+    indexer.index(str(docs), [FsChange("upsert", "guide.md")])
 
     client.delete_collection.assert_not_called()
     client.delete.assert_called()
@@ -442,7 +442,7 @@ def test_apply_changes_skips_unchanged_file(tmp_path: Path) -> None:
         document_reader=FakeReader(),
     )
     indexer._client = client
-    indexer.apply_changes(str(docs), [FsChange("upsert", "guide.md")])
+    indexer.index(str(docs), [FsChange("upsert", "guide.md")])
 
     client.upsert.assert_not_called()
     assert FakeEmbedder.embed_calls == 0
@@ -467,7 +467,7 @@ def test_apply_changes_skips_duplicate_copy(tmp_path: Path) -> None:
         document_reader=FakeReader(),
     )
     indexer._client = client
-    indexer.apply_changes(str(docs), [FsChange("upsert", "sub/a.md")])
+    indexer.index(str(docs), [FsChange("upsert", "sub/a.md")])
 
     client.upsert.assert_not_called()
     assert FakeEmbedder.embed_calls == 0
@@ -500,7 +500,7 @@ def test_apply_changes_delete_promotes_next_duplicate(tmp_path: Path) -> None:
     )
     indexer._client = client
     (docs / "a.md").unlink()
-    indexer.apply_changes(str(docs), [FsChange("delete", "a.md")])
+    indexer.index(str(docs), [FsChange("delete", "a.md")])
 
     upsert_sources = {
         point.payload["source_path"]
@@ -523,7 +523,7 @@ def test_apply_changes_delete_uses_source_path_filter(tmp_path: Path) -> None:
         document_reader=FakeReader(),
     )
     indexer._client = client
-    indexer.apply_changes(str(docs), [FsChange("delete", "gone.md")])
+    indexer.index(str(docs), [FsChange("delete", "gone.md")])
 
     client.delete_collection.assert_not_called()
     client.upsert.assert_not_called()
@@ -555,7 +555,7 @@ def test_apply_changes_repeat_upsert_after_content_change(tmp_path: Path) -> Non
     )
     indexer._client = client
     path.write_text("longer text now", encoding="utf-8")
-    indexer.apply_changes(str(docs), [FsChange("upsert", "guide.md")])
+    indexer.index(str(docs), [FsChange("upsert", "guide.md")])
     assert client.upsert.call_count == 1
 
 
@@ -576,5 +576,5 @@ def test_apply_changes_prefix_delete_scrolls_matching_sources(tmp_path: Path) ->
         document_reader=FakeReader(),
     )
     indexer._client = client
-    indexer.apply_changes(str(docs), [FsChange("delete", "sub", is_prefix=True)])
+    indexer.index(str(docs), [FsChange("delete", "sub", is_prefix=True)])
     assert client.delete.call_args.kwargs["points_selector"] == ["nested"]
