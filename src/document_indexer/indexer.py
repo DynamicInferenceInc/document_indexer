@@ -15,7 +15,7 @@ from document_indexer.adapters.document_readers import (
 from document_indexer.adapters.qdrant_indexer import QdrantIndexer
 from document_indexer.config import IndexerSettings, LocalSourceSettings, SmbSourceSettings
 from document_indexer.domain.changes import FsChange
-from document_indexer.domain.documents import parse_index_extensions, resolve_index_extensions
+from document_indexer.domain.documents import resolve_index_extensions
 from document_indexer.infra.embeddings import OllamaEmbedder
 from document_indexer.infra.logging_config import configure_logging
 from document_indexer.ports import Indexer
@@ -240,13 +240,6 @@ def run(settings: IndexerSettings | None = None) -> None:
 
 
 def _log_extensions(settings: IndexerSettings) -> frozenset[str]:
-    configured = parse_index_extensions(settings.index_extensions)
     allowed = resolve_index_extensions(settings.index_extensions)
-    unknown = configured - allowed
-    if unknown:
-        logger.warning(
-            "INDEX_EXTENSIONS has unsupported types (no reader): %s",
-            sorted(unknown),
-        )
     logger.info("Index extensions enabled: %s", sorted(allowed))
     return allowed

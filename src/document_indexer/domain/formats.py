@@ -1,4 +1,9 @@
-"""Supported document suffixes for discovery and readers."""
+"""What Docling can convert. Not the list of files to index.
+
+Which suffixes are actually indexed comes from ``INDEX_EXTENSIONS`` in env /
+``IndexerSettings``. This set is only the capability whitelist used to reject
+unknown types like ``.bin``.
+"""
 
 from __future__ import annotations
 

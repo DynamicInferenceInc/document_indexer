@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from document_indexer.domain.documents import resolve_index_extensions
 
 
 class QdrantSettings(BaseModel):
@@ -60,11 +62,6 @@ class SmbSourceSettings(BaseModel):
     timeout_sec: float = 30.0
     poll_interval_sec: float = 15.0
     max_backoff_sec: float = 60.0
-
-
-_DEFAULT_EXTENSIONS = (
-    ".txt,.md,.markdown,.rst,.log,.csv,.pdf,.docx,.pptx,.xlsx,.xls,.html,.htm"
-)
 
 
 class IndexerSettings(BaseSettings):
@@ -197,8 +194,12 @@ class IndexerSettings(BaseSettings):
         ),
     )
     index_extensions: str = Field(
-        default=_DEFAULT_EXTENSIONS,
+        default="",
         validation_alias=AliasChoices("index_extensions", "INDEX_EXTENSIONS"),
+        description=(
+            "Comma-separated suffixes to index. Empty means all Docling-readable "
+            "types from domain.formats. Unknown types raise at settings load."
+        ),
     )
     log_level: str = Field(
         default="INFO",
@@ -270,6 +271,12 @@ class IndexerSettings(BaseSettings):
             ):
                 _copy_if_absent(expanded, key, payload.get(key))
         return expanded
+
+    @field_validator("index_extensions")
+    @classmethod
+    def _index_extensions_must_be_docling_readable(cls, value: str) -> str:
+        resolve_index_extensions(value)
+        return value
 
     @model_validator(mode="after")
     def _require_smb_fields(self) -> IndexerSettings:

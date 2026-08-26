@@ -28,16 +28,23 @@ def resolve_index_extensions(
     *,
     readable: Iterable[str] = SUPPORTED_SUFFIXES,
 ) -> frozenset[str]:
-    """Return configured extensions that the indexer can actually read.
+    """Return configured extensions that Docling can actually read.
 
-    Unknown extensions from config are dropped (no reader available).
-    Empty config falls back to all readable suffixes.
+    Empty config falls back to all readable suffixes. Unknown types raise
+    ``ValueError`` instead of being silently skipped.
     """
     readable_set = {suffix.lower() for suffix in readable}
     configured = parse_index_extensions(raw)
     if not configured:
         return frozenset(readable_set)
-    return frozenset(ext for ext in configured if ext in readable_set)
+    unknown = sorted(ext for ext in configured if ext not in readable_set)
+    if unknown:
+        supported = ", ".join(sorted(readable_set))
+        raise ValueError(
+            f"INDEX_EXTENSIONS has types Docling cannot read: {unknown}. "
+            f"Supported: {supported}"
+        )
+    return configured
 
 
 def iter_document_files(

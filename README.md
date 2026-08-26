@@ -101,7 +101,7 @@ hr = DocumentIndexer(IndexerSettings(
 | `CHUNK_SIZE` | max tokens HybridChunker | `1024` |
 | `PICTURE_DESCRIPTION_ENABLED` | VLM-описания картинок | `true` |
 | `VLM_MODEL` | модель описаний | `qwen3-vl:8b` |
-| `INDEX_EXTENSIONS` | список суффиксов | `.txt,.md,...,.htm` |
+| `INDEX_EXTENSIONS` | суффиксы для индексации (проверка на Docling) | пусто = все поддерживаемые |
 | `LOG_LEVEL` | уровень логов | `INFO` |
 
 Пароль SMB хранится как `SecretStr` и маскируется в `model_dump_safe()`. Не кладите `.env` в git.
