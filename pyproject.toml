@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 docling = [
-    "docling>=2.0.0",
+    "docling>=2.122.0",
 ]
 runtime = [
     "watchdog>=4.0.0",

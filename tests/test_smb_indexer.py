@@ -17,10 +17,14 @@ class RecordingIndexer(Indexer):
         self.reindex_calls: list[str] = []
         self.applied: list[tuple[str, list[FsChange]]] = []
 
-    def reindex(self, watch_path: str) -> None:
-        self.reindex_calls.append(watch_path)
-
-    def apply_changes(self, watch_path: str, changes: Sequence[FsChange]) -> None:
+    def index(
+        self,
+        watch_path: str,
+        changes: Sequence[FsChange] | None = None,
+    ) -> None:
+        if changes is None:
+            self.reindex_calls.append(watch_path)
+            return
         self.applied.append((watch_path, list(changes)))
 
 

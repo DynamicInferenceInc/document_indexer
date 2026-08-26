@@ -16,17 +16,21 @@ from document_indexer.sources.local import ChangeHandler, create_observer
 
 
 class RecordingIndexer(Indexer):
-    """Test double that records incremental apply_changes / reindex calls."""
+    """Test double that records index calls."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.applied: list[list[FsChange]] = []
         self.fail_next = False
 
-    def reindex(self, watch_path: str) -> None:
-        self.calls.append(watch_path)
-
-    def apply_changes(self, watch_path: str, changes: Sequence[FsChange]) -> None:
+    def index(
+        self,
+        watch_path: str,
+        changes: Sequence[FsChange] | None = None,
+    ) -> None:
+        if changes is None:
+            self.calls.append(watch_path)
+            return
         if self.fail_next:
             self.fail_next = False
             raise RuntimeError("simulated indexer failure")
@@ -225,11 +229,18 @@ def test_events_during_apply_coalesce_to_one_followup() -> None:
     release = threading.Event()
 
     class SlowIndexer(RecordingIndexer):
-        def apply_changes(self, watch_path: str, changes: Sequence[FsChange]) -> None:
+        def index(
+            self,
+            watch_path: str,
+            changes: Sequence[FsChange] | None = None,
+        ) -> None:
+            if changes is None:
+                super().index(watch_path)
+                return
             started.set()
             if not release.wait(timeout=5.0):
                 raise TimeoutError("test gate was not released")
-            super().apply_changes(watch_path, changes)
+            super().index(watch_path, changes)
 
     indexer = SlowIndexer()
     debouncer = DebouncedReindex(

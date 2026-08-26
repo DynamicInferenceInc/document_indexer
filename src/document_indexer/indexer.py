@@ -8,9 +8,13 @@ import threading
 from collections.abc import Sequence
 from pathlib import Path
 
-from document_indexer.adapters.document_readers import (
-    PictureDescriptionConfig,
-    build_default_document_reader,
+from docling.chunking import HybridChunker
+from docling.document_converter import DocumentConverter
+
+from document_indexer.adapters.document_readers import DoclingDocumentReader, PictureDescriptionConfig
+from document_indexer.adapters.docling_convert import (
+    MarkdownChunkSerializerProvider,
+    tokenizer_with_max_tokens,
 )
 from document_indexer.adapters.qdrant_indexer import QdrantIndexer
 from document_indexer.config import IndexerSettings, LocalSourceSettings, SmbSourceSettings
@@ -65,10 +69,10 @@ class DocumentIndexer:
         logger.info(
             "Starting one-shot reindex on %s (qdrant=%s collection=%s)",
             root,
-            self._settings.qdrant_url,
-            self._settings.qdrant_collection,
+            self._settings.qdrant.url,
+            self._settings.qdrant.collection,
         )
-        self._core.reindex(str(root))
+        self._core.index(str(root))
         logger.info("One-shot reindex complete path=%s", root)
 
     def run(self) -> None:
@@ -79,23 +83,24 @@ class DocumentIndexer:
         logger.info(
             "Starting indexer on %s (qdrant=%s collection=%s source=%s)",
             root,
-            self._settings.qdrant_url,
-            self._settings.qdrant_collection,
-            self._settings.source_type,
+            self._settings.qdrant.url,
+            self._settings.qdrant.collection,
+            self._settings.source.kind,
         )
         try:
-            self._core.reindex(str(root))
+            self._core.index(str(root))
         except Exception:
             logger.exception("Initial reindex failed for %s", root)
             if self._stop.is_set():
                 return
             raise
 
-        if isinstance(self._settings.source, LocalSourceSettings):
+        source = self._settings.source
+        if isinstance(source, LocalSourceSettings):
             self._debouncer = DebouncedReindex(
                 indexer=self._core,
                 watch_path=str(root),
-                debounce_seconds=self._settings.debounce_seconds,
+                debounce_seconds=source.debounce_seconds,
             )
             self._source.start(self._notify_debounced)
         else:
@@ -125,10 +130,10 @@ class DocumentIndexer:
         if not changes:
             return
         try:
-            self._core.apply_changes(str(self._source.local_root()), changes)
+            self._core.index(str(self._source.local_root()), changes)
         except Exception:
             logger.exception(
-                "Indexer.apply_changes failed for %s",
+                "Indexer.index failed for %s",
                 self._source.local_root(),
             )
 
@@ -195,20 +200,31 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
         model=models.embedding_model,
         timeout_sec=models.embedding_timeout_sec,
     )
-    reader = build_default_document_reader(
-        max_tokens=models.chunk_size,
-        picture=PictureDescriptionConfig(
-            enabled=models.picture_description_enabled,
-            ollama_base_url=models.ollama_base_url,
-            model=models.vlm_model,
-            timeout_sec=models.vlm_timeout_sec,
-            concurrency=models.vlm_concurrency,
-            area_threshold=models.picture_area_threshold,
+    picture = PictureDescriptionConfig(
+        enabled=models.picture_description_enabled,
+        ollama_base_url=models.ollama_base_url,
+        model=models.vlm_model,
+        timeout_sec=models.vlm_timeout_sec,
+        concurrency=models.vlm_concurrency,
+        area_threshold=models.picture_area_threshold,
+    )
+    tokenizer = tokenizer_with_max_tokens(models.chunk_size)
+    reader = DoclingDocumentReader(
+        DocumentConverter(format_options=picture.format_options()),
+        HybridChunker(
+            merge_peers=True,
+            # Tables are rendered from TableItem; repeating headers makes fragments.
+            repeat_table_header=False,
+            tokenizer=tokenizer,
+            serializer_provider=MarkdownChunkSerializerProvider(),
         ),
+        max_tokens=models.chunk_size,
+        tokenizer=tokenizer,
+        picture=picture,
     )
     return QdrantIndexer(
-        qdrant_url=settings.qdrant_url,
-        collection=settings.qdrant_collection,
+        qdrant_url=settings.qdrant.url,
+        collection=settings.qdrant.collection,
         embedder=embedder,
         document_reader=reader,
         allowed_extensions=allowed,

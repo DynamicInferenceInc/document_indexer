@@ -10,14 +10,12 @@ import uuid
 from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
+from typing import overload
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 
-from document_indexer.adapters.document_readers import (
-    build_default_document_reader,
-    is_useful_chunk_text,
-)
+from document_indexer.adapters.docling_chunking import is_useful_chunk_text
 from document_indexer.domain.changes import FsChange
 from document_indexer.domain.documents import iter_document_files
 from document_indexer.ports import DocumentReader, Embedder
@@ -39,19 +37,32 @@ class QdrantIndexer:
         qdrant_url: str,
         collection: str,
         embedder: Embedder,
-        document_reader: DocumentReader | None = None,
+        document_reader: DocumentReader,
         allowed_extensions: frozenset[str] | set[str] | None = None,
-        max_tokens: int = 512,
     ) -> None:
         self._client = QdrantClient(url=qdrant_url, check_compatibility=False)
         self._collection = collection
         self._embedder = embedder
-        self._document_reader = document_reader or build_default_document_reader(
-            max_tokens=max_tokens,
-        )
+        self._document_reader = document_reader
         self._allowed_extensions = frozenset(allowed_extensions or ())
 
-    def reindex(self, watch_path: str) -> None:
+    @overload
+    def index(self, watch_path: str) -> None: ...
+
+    @overload
+    def index(self, watch_path: str, changes: Sequence[FsChange]) -> None: ...
+
+    def index(
+        self,
+        watch_path: str,
+        changes: Sequence[FsChange] | None = None,
+    ) -> None:
+        if changes is None:
+            self._reindex(watch_path)
+            return
+        self._apply_changes(watch_path, changes)
+
+    def _reindex(self, watch_path: str) -> None:
         root = Path(watch_path)
         files = iter_document_files(
             root,
@@ -110,7 +121,7 @@ class QdrantIndexer:
             stale_removed,
         )
 
-    def apply_changes(self, watch_path: str, changes: Sequence[FsChange]) -> None:
+    def _apply_changes(self, watch_path: str, changes: Sequence[FsChange]) -> None:
         if not changes:
             return
         logger.info(
@@ -248,7 +259,7 @@ class QdrantIndexer:
         )
         started = time.perf_counter()
         try:
-            part_vectors = self._embedder.embed_documents(embedding_inputs)
+            part_vectors = self._embedder.embed(embedding_inputs)
         except Exception:
             logger.exception("Failed to embed document %s chunks=%s", relative, len(chunks))
             return None

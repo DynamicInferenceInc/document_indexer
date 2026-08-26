@@ -4,6 +4,8 @@ from document_indexer.config import (
     IndexerSettings,
     LocalSourceSettings,
     ModelSettings,
+    ProfileLocal,
+    ProfileSmb,
     QdrantSettings,
     SmbSourceSettings,
 )
@@ -16,6 +18,8 @@ __all__ = [
     "IndexerSettings",
     "LocalSourceSettings",
     "ModelSettings",
+    "ProfileLocal",
+    "ProfileSmb",
     "QdrantSettings",
     "SmbSourceSettings",
     "reindex_once",
