@@ -1,0 +1,26 @@
+# Virtualenv and Python artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Local secrets and runtime data
+.env
+.env.*
+!.env.example
+*.staging/
+.staging/
+
+# Editors and tests
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
