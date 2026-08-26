@@ -1,41 +1,51 @@
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from docling_core.types.doc.items.table.table import TableItem
+from docling_core.types.doc.items.table.table_data import TableData
 
-from document_indexer.adapters.document_readers import (
-    CompositeDocumentReader,
-    DoclingDocumentReader,
-    PictureDescriptionConfig,
-    TextDocumentReader,
+from document_indexer.adapters.docling_chunking import split_oversized_text
+from document_indexer.adapters.docling_convert import (
     chat_completions_url,
     format_picture_block,
-    merge_split_table_chunks,
-    picture_pipeline_flags,
-    split_oversized_text,
 )
+from document_indexer.adapters.document_readers import DoclingDocumentReader
 from document_indexer.domain.models import DocumentChunk
 
 
-def test_text_document_reader(tmp_path: Path) -> None:
-    path = tmp_path / "note.md"
-    path.write_text("привет docs", encoding="utf-8")
-    chunks = TextDocumentReader().read(path)
-    assert chunks == [DocumentChunk(text="привет docs")]
+def _table(self_ref: str) -> TableItem:
+    return TableItem(self_ref=self_ref, data=TableData())
 
 
-def test_text_document_reader_empty(tmp_path: Path) -> None:
-    path = tmp_path / "empty.txt"
-    path.write_text("  \n", encoding="utf-8")
-    assert TextDocumentReader().read(path) == []
+def _document(*tables: TableItem) -> SimpleNamespace:
+    return SimpleNamespace(tables=list(tables))
 
 
-def test_composite_unsupported_suffix(tmp_path: Path) -> None:
+class _Serializer:
+    def __init__(self, rendered: dict[str, str]) -> None:
+        self._rendered = rendered
+
+    def serialize(self, *, item):
+        return SimpleNamespace(text=self._rendered.get(item.self_ref, ""))
+
+
+def _chunker(*, raws, rendered: dict[str, str] | None = None):
+    provider = MagicMock()
+    if rendered is not None:
+        provider.get_serializer.return_value = _Serializer(rendered)
+    chunker = MagicMock()
+    chunker.chunk.return_value = raws
+    chunker.serializer_provider = provider
+    return chunker
+
+
+def test_docling_reader_unsupported_suffix(tmp_path: Path) -> None:
     path = tmp_path / "a.bin"
     path.write_bytes(b"\x00\x01")
-    reader = CompositeDocumentReader(readers={})
     try:
-        reader.read(path)
+        DoclingDocumentReader(MagicMock(), MagicMock()).read(path)
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "Unsupported" in str(exc)
@@ -48,7 +58,7 @@ def test_docling_reader_hybrid_chunks(tmp_path: Path) -> None:
     raw_chunk = MagicMock()
     raw_chunk.meta.headings = ["Раздел 1", "Подраздел"]
     result = MagicMock()
-    result.document = object()
+    result.document = _document()
     converter = MagicMock()
     converter.convert.return_value = result
     chunker = MagicMock()
@@ -65,44 +75,42 @@ def test_docling_reader_hybrid_chunks(tmp_path: Path) -> None:
     chunker.contextualize.assert_called_once_with(raw_chunk)
 
 
-def test_composite_dispatches_all_supported_suffixes(tmp_path: Path) -> None:
+def test_docling_reader_reads_markdown(tmp_path: Path) -> None:
     path = tmp_path / "guide.md"
     path.write_text("# Title", encoding="utf-8")
 
     raw_chunk = MagicMock()
     raw_chunk.meta.headings = ["Title"]
     result = MagicMock()
-    result.document = object()
+    result.document = _document()
     converter = MagicMock()
     converter.convert.return_value = result
     chunker = MagicMock()
     chunker.chunk.return_value = [raw_chunk]
     chunker.contextualize.return_value = "# Title\n\nbody"
 
-    reader = CompositeDocumentReader(converter=converter, chunker=chunker)
+    reader = DoclingDocumentReader(converter=converter, chunker=chunker)
     chunks = list(reader.read(path))
     assert chunks[0].text == "# Title\n\nbody"
     assert chunks[0].headings == ("Title",)
     converter.convert.assert_called_once_with(str(path))
 
 
-def test_composite_dispatches_xlsx(tmp_path: Path) -> None:
+def test_docling_reader_reads_xlsx(tmp_path: Path) -> None:
     path = tmp_path / "sheet.xlsx"
     path.write_bytes(b"PK")
 
     raw_chunk = MagicMock()
     raw_chunk.meta.headings = []
     result = MagicMock()
-    result.document = object()
+    result.document = _document()
     converter = MagicMock()
     converter.convert.return_value = result
     chunker = MagicMock()
     chunker.chunk.return_value = [raw_chunk]
     chunker.contextualize.return_value = "| a | b |\n|---|---|\n| 1 | 2 |"
 
-    reader = CompositeDocumentReader(
-        readers={".xlsx": DoclingDocumentReader(converter=converter, chunker=chunker)}
-    )
+    reader = DoclingDocumentReader(converter=converter, chunker=chunker)
     chunks = list(reader.read(path))
     assert "1 | 2" in chunks[0].text
     converter.convert.assert_called_once_with(str(path))
@@ -117,7 +125,7 @@ def test_docling_reader_skips_empty_contextualized_chunks(tmp_path: Path) -> Non
     filled = MagicMock()
     filled.meta.headings = ["H"]
     result = MagicMock()
-    result.document = object()
+    result.document = _document()
     converter = MagicMock()
     converter.convert.return_value = result
     chunker = MagicMock()
@@ -126,28 +134,6 @@ def test_docling_reader_skips_empty_contextualized_chunks(tmp_path: Path) -> Non
 
     chunks = DoclingDocumentReader(converter=converter, chunker=chunker).read(path)
     assert chunks == [DocumentChunk(text="kept", headings=("H",))]
-
-
-def test_docling_reader_missing_package(monkeypatch, tmp_path: Path) -> None:
-    path = tmp_path / "a.docx"
-    path.write_bytes(b"PK")
-
-    import builtins
-
-    real_import = builtins.__import__
-
-    def fake_import(name, *args, **kwargs):
-        if name == "docling.document_converter" or name.startswith("docling"):
-            raise ImportError("no docling")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    try:
-        DoclingDocumentReader().read(path)
-        assert False, "expected RuntimeError"
-    except RuntimeError as exc:
-        assert "docling" in str(exc)
 
 
 def test_format_picture_block_includes_description_and_caption() -> None:
@@ -166,21 +152,6 @@ def test_format_picture_block_empty_description() -> None:
     assert "<!-- image -->" not in format_picture_block(description="")
 
 
-def test_picture_pipeline_flags_disabled_keeps_ocr_off_only() -> None:
-    flags = picture_pipeline_flags(PictureDescriptionConfig(enabled=False))
-    assert flags == {"do_ocr": False}
-    assert "enable_remote_services" not in flags
-    assert "do_picture_description" not in flags
-
-
-def test_picture_pipeline_flags_enabled_uses_remote_vlm() -> None:
-    flags = picture_pipeline_flags(PictureDescriptionConfig(enabled=True))
-    assert flags["do_ocr"] is False
-    assert flags["do_picture_description"] is True
-    assert flags["enable_remote_services"] is True
-    assert flags["generate_picture_images"] is True
-
-
 def test_chat_completions_url_uses_ollama_base() -> None:
     assert (
         chat_completions_url("http://127.0.0.1:11434")
@@ -193,7 +164,7 @@ def test_chat_completions_url_uses_ollama_base() -> None:
 
 
 def test_picture_serializer_uses_annotation_and_caption() -> None:
-    from document_indexer.adapters.document_readers import _PictureDescriptionSerializer
+    from document_indexer.adapters.docling_convert import PictureDescriptionSerializer
 
     item = MagicMock()
     annotation = MagicMock()
@@ -201,7 +172,7 @@ def test_picture_serializer_uses_annotation_and_caption() -> None:
     item.annotations = [annotation]
     item.caption_text = lambda doc=None: "Скрин формы"
     item.self_ref = "#/pictures/0"
-    result = _PictureDescriptionSerializer().serialize(item=item, doc=None)
+    result = PictureDescriptionSerializer().serialize(item=item, doc=None)
     text = result if isinstance(result, str) else getattr(result, "text", "")
     assert "[Изображение]" in text
     assert "Описание: кнопка Провести" in text
@@ -213,26 +184,13 @@ def test_picture_serializer_is_accepted_by_chunking_doc_serializer() -> None:
     from docling_core.transforms.chunker.hierarchical_chunker import ChunkingDocSerializer
     from docling_core.types.doc.document import DoclingDocument
 
-    from document_indexer.adapters.document_readers import _as_base_picture_serializer
+    from document_indexer.adapters.docling_convert import PictureDescriptionSerializer
 
     serializer = ChunkingDocSerializer(
         doc=DoclingDocument(name="probe"),
-        picture_serializer=_as_base_picture_serializer(),
+        picture_serializer=PictureDescriptionSerializer(),
     )
     assert serializer.picture_serializer is not None
-    from document_indexer.adapters.document_readers import _PictureDescriptionSerializer
-
-    item = MagicMock()
-    annotation = MagicMock()
-    annotation.text = "кнопка Провести"
-    item.annotations = [annotation]
-    item.caption_text = lambda doc=None: "Скрин формы"
-    item.self_ref = "#/pictures/0"
-    result = _PictureDescriptionSerializer().serialize(item=item, doc=None)
-    text = result if isinstance(result, str) else getattr(result, "text", "")
-    assert "[Изображение]" in text
-    assert "Описание: кнопка Провести" in text
-    assert "Подпись: Скрин формы" in text
 
 
 class _CountingTokenizer:
@@ -309,65 +267,6 @@ def test_split_oversized_text_keeps_html_table_as_one_chunk() -> None:
     assert "K0-2" in pieces[1] and "K1" in pieces[1]
 
 
-def test_merge_split_table_chunks_joins_repeated_header_fragments() -> None:
-    headings = ("Критерии перехода",)
-    first = DocumentChunk(
-        text=(
-            "| Этап | Условие |\n"
-            "|------|---------|\n"
-            "| Intern 1 | адаптация |"
-        ),
-        headings=headings,
-    )
-    echo = DocumentChunk(text="Критерии перехода", headings=headings)
-    second = DocumentChunk(
-        text=(
-            "| Этап | Условие |\n"
-            "|------|---------|\n"
-            "| K0-2 | PM готов покупать по K0 |\n"
-            "| K1 | после K0-2 |"
-        ),
-        headings=headings,
-    )
-
-    merged = merge_split_table_chunks([first, echo, second])
-    assert len(merged) == 1
-    assert "Intern 1 | адаптация" in merged[0].text
-    assert "K0-2 | PM готов покупать по K0" in merged[0].text
-    assert "K1 | после K0-2" in merged[0].text
-    assert merged[0].text.count("| Этап | Условие |") == 1
-
-
-def test_merge_split_table_chunks_keeps_different_tables_apart() -> None:
-    headings = ("Раздел",)
-    first = DocumentChunk(
-        text="| Этап | Условие |\n|------|---------|\n| K0 | адаптация |",
-        headings=headings,
-    )
-    second = DocumentChunk(
-        text="| Роль | Требование |\n|------|------------|\n| PM | покупает |",
-        headings=headings,
-    )
-    merged = merge_split_table_chunks([first, second])
-    assert [chunk.text for chunk in merged] == [first.text, second.text]
-
-
-def test_merge_split_table_chunks_does_not_extend_atomic_table() -> None:
-    headings = ("Раздел",)
-    full = DocumentChunk(
-        text="| Этап | Условие |\n|------|---------|\n| K0 | адаптация |\n| K1 | переход |",
-        headings=headings,
-        atomic=True,
-    )
-    fragment = DocumentChunk(
-        text="| Этап | Условие |\n|------|---------|\n| K1 | переход |",
-        headings=headings,
-    )
-    merged = merge_split_table_chunks([full, fragment])
-    assert merged[0] is full
-    assert merged[1].text == fragment.text
-
-
 def test_docling_reader_renders_full_table_item_once(tmp_path: Path) -> None:
     path = tmp_path / "grades.pptx"
     path.write_bytes(b"PK")
@@ -379,32 +278,19 @@ def test_docling_reader_renders_full_table_item_once(tmp_path: Path) -> None:
         "| K0-2 | PM готов покупать по K0 |\n"
         "| K1 | после K0-2 |"
     )
-    table = MagicMock()
-    table.self_ref = "#/tables/0"
-    table.export_to_markdown.return_value = full_table
-    table.data.grid = []
-
+    table = _table("#/tables/0")
     first = MagicMock()
     first.meta.headings = ["Критерии"]
     first.meta.doc_items = [table]
     second = MagicMock()
     second.meta.headings = ["Критерии"]
     second.meta.doc_items = [table]
-    result = MagicMock()
-    result.document = object()
     converter = MagicMock()
-    converter.convert.return_value = result
-    chunker = MagicMock()
-    chunker.chunk.return_value = [first, second]
-    chunker.contextualize.side_effect = [
-        "| Этап | Условие |\n|------|---------|\n| Intern 1 | адаптация |",
-        (
-            "|\n"
-            "|-----------------------------------------------------------------------|"
-            "-----------------------------------------------------------------------|"
-        ),
-    ]
-    chunker.serializer_provider = None
+    converter.convert.return_value = SimpleNamespace(document=_document(table))
+    chunker = _chunker(
+        raws=[first, second],
+        rendered={table.self_ref: full_table},
+    )
 
     chunks = DoclingDocumentReader(
         converter=converter,
@@ -423,41 +309,22 @@ def test_docling_reader_renders_full_table_item_once(tmp_path: Path) -> None:
     chunker.contextualize.assert_not_called()
 
 
-def test_docling_reader_renders_table_from_grid_without_size_limit(
-    tmp_path: Path,
-) -> None:
+def test_docling_reader_splits_wide_table_embedding_parts(tmp_path: Path) -> None:
     path = tmp_path / "sheet.xlsx"
     path.write_bytes(b"PK")
-
-    class _Cell:
-        def __init__(self, text: str) -> None:
-            self.text = text
-
-    class _Table:
-        self_ref = "#/tables/3"
-        data = type(
-            "Data",
-            (),
-            {
-                "grid": [
-                    [_Cell("Этап"), _Cell("Условие")],
-                    [_Cell("K0-2"), _Cell("PM готов покупать по K0")],
-                    [_Cell("K1"), _Cell("после K0-2")],
-                ]
-            },
-        )()
-
+    markdown = (
+        "| Этап | Условие |\n"
+        "|------|---------|\n"
+        "| K0-2 | PM готов покупать по K0 |\n"
+        "| K1 | после K0-2 |"
+    )
+    table = _table("#/tables/3")
     raw = MagicMock()
     raw.meta.headings = ["Лист"]
-    raw.meta.doc_items = [_Table()]
-    result = MagicMock()
-    result.document = object()
+    raw.meta.doc_items = [table]
     converter = MagicMock()
-    converter.convert.return_value = result
-    chunker = MagicMock()
-    chunker.chunk.return_value = [raw]
-    chunker.contextualize.return_value = "should not be used"
-    chunker.serializer_provider = None
+    converter.convert.return_value = SimpleNamespace(document=_document(table))
+    chunker = _chunker(raws=[raw], rendered={table.self_ref: markdown})
 
     chunks = DoclingDocumentReader(
         converter=converter,
@@ -480,36 +347,20 @@ def test_docling_reader_preserves_mixed_prose_table_order(tmp_path: Path) -> Non
 
     before = type("TextItem", (), {"self_ref": "#/texts/0"})()
     after = type("TextItem", (), {"self_ref": "#/texts/1"})()
-    table = type(
-        "TableItem",
-        (),
-        {
-            "self_ref": "#/tables/0",
-            "data": type("Data", (), {"grid": []})(),
-        },
-    )()
+    table = _table("#/tables/0")
     raw = MagicMock()
     raw.meta.headings = ["Раздел"]
     raw.meta.doc_items = [before, table, after]
-
-    rendered = {
-        before.self_ref: "Текст до таблицы",
-        table.self_ref: "| A | B |\n|---|---|\n| 1 | 2 |",
-        after.self_ref: "Текст после таблицы",
-    }
-
-    class Serializer:
-        def serialize(self, *, item):
-            return type("Result", (), {"text": rendered[item.self_ref]})()
-
-    provider = MagicMock()
-    provider.get_serializer.return_value = Serializer()
-    chunker = MagicMock()
-    chunker.chunk.return_value = [raw]
-    chunker.serializer_provider = provider
-    document = type("Document", (), {"tables": [table]})()
     converter = MagicMock()
-    converter.convert.return_value = type("Result", (), {"document": document})()
+    converter.convert.return_value = SimpleNamespace(document=_document(table))
+    chunker = _chunker(
+        raws=[raw],
+        rendered={
+            before.self_ref: "Текст до таблицы",
+            table.self_ref: "| A | B |\n|---|---|\n| 1 | 2 |",
+            after.self_ref: "Текст после таблицы",
+        },
+    )
 
     chunks = DoclingDocumentReader(converter=converter, chunker=chunker).read(path)
 
@@ -525,26 +376,19 @@ def test_docling_reader_keeps_same_header_tables_separate(tmp_path: Path) -> Non
     path = tmp_path / "two-tables.pptx"
     path.write_bytes(b"PK")
     markdown = "| A | B |\n|---|---|\n| 1 | 2 |"
-
-    tables = []
+    tables = [_table(f"#/tables/{index}") for index in range(2)]
     raws = []
-    for index in range(2):
-        table = MagicMock()
-        table.self_ref = f"#/tables/{index}"
-        table.export_to_markdown.return_value = markdown
-        table.data.grid = []
-        tables.append(table)
+    for table in tables:
         raw = MagicMock()
         raw.meta.headings = ["Один раздел"]
         raw.meta.doc_items = [table]
         raws.append(raw)
-
-    document = type("Document", (), {"tables": tables})()
     converter = MagicMock()
-    converter.convert.return_value = type("Result", (), {"document": document})()
-    chunker = MagicMock()
-    chunker.chunk.return_value = raws
-    chunker.serializer_provider = None
+    converter.convert.return_value = SimpleNamespace(document=_document(*tables))
+    chunker = _chunker(
+        raws=raws,
+        rendered={table.self_ref: markdown for table in tables},
+    )
 
     chunks = DoclingDocumentReader(converter=converter, chunker=chunker).read(path)
 
@@ -557,22 +401,13 @@ def test_docling_reader_rejects_structural_table_without_content(
 ) -> None:
     path = tmp_path / "empty-table.pptx"
     path.write_bytes(b"PK")
-    table = MagicMock()
-    table.self_ref = "#/tables/0"
-    table.export_to_markdown.return_value = "|\n|------|------|"
-    table.data.grid = []
+    table = _table("#/tables/0")
     raw = MagicMock()
     raw.meta.headings = []
     raw.meta.doc_items = [table]
     converter = MagicMock()
-    converter.convert.return_value = type(
-        "Result",
-        (),
-        {"document": type("Document", (), {"tables": [table]})()},
-    )()
-    chunker = MagicMock()
-    chunker.chunk.return_value = [raw]
-    chunker.serializer_provider = None
+    converter.convert.return_value = SimpleNamespace(document=_document(table))
+    chunker = _chunker(raws=[raw], rendered={table.self_ref: "|\n|------|------|"})
 
     with pytest.raises(RuntimeError, match="without useful content"):
         DoclingDocumentReader(converter=converter, chunker=chunker).read(path)
@@ -585,17 +420,11 @@ def test_docling_reader_drops_separator_only_non_table_chunk(tmp_path: Path) -> 
     raw.meta.headings = ["Раздел"]
     raw.meta.doc_items = []
     converter = MagicMock()
-    converter.convert.return_value = type(
-        "Result",
-        (),
-        {"document": object()},
-    )()
-    chunker = MagicMock()
-    chunker.chunk.return_value = [raw]
+    converter.convert.return_value = SimpleNamespace(document=_document())
+    chunker = _chunker(raws=[raw])
     chunker.contextualize.return_value = (
         "|\n|-----------------------------------------------------------------------|"
     )
-    chunker.serializer_provider = None
 
     chunks = DoclingDocumentReader(converter=converter, chunker=chunker).read(path)
 
@@ -618,10 +447,10 @@ def test_vlm_http_logging_records_chat_completions(monkeypatch, caplog) -> None:
         return DummyResponse()
 
     monkeypatch.setattr(requests.Session, "post", fake_post)
-    from document_indexer.adapters.document_readers import _log_vlm_http
+    from document_indexer.adapters.document_readers import log_vlm_http
 
     caplog.set_level(logging_mod.INFO)
-    with _log_vlm_http():
+    with log_vlm_http():
         session = requests.Session()
         session.post("https://huggingface.co/api/models/x")
         session.post(

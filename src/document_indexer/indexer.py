@@ -8,9 +8,13 @@ import threading
 from collections.abc import Sequence
 from pathlib import Path
 
-from document_indexer.adapters.document_readers import (
-    PictureDescriptionConfig,
-    build_default_document_reader,
+from docling.chunking import HybridChunker
+from docling.document_converter import DocumentConverter
+
+from document_indexer.adapters.document_readers import DoclingDocumentReader, PictureDescriptionConfig
+from document_indexer.adapters.docling_convert import (
+    MarkdownChunkSerializerProvider,
+    tokenizer_with_max_tokens,
 )
 from document_indexer.adapters.qdrant_indexer import QdrantIndexer
 from document_indexer.config import IndexerSettings, LocalSourceSettings, SmbSourceSettings
@@ -196,16 +200,27 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
         model=models.embedding_model,
         timeout_sec=models.embedding_timeout_sec,
     )
-    reader = build_default_document_reader(
-        max_tokens=models.chunk_size,
-        picture=PictureDescriptionConfig(
-            enabled=models.picture_description_enabled,
-            ollama_base_url=models.ollama_base_url,
-            model=models.vlm_model,
-            timeout_sec=models.vlm_timeout_sec,
-            concurrency=models.vlm_concurrency,
-            area_threshold=models.picture_area_threshold,
+    picture = PictureDescriptionConfig(
+        enabled=models.picture_description_enabled,
+        ollama_base_url=models.ollama_base_url,
+        model=models.vlm_model,
+        timeout_sec=models.vlm_timeout_sec,
+        concurrency=models.vlm_concurrency,
+        area_threshold=models.picture_area_threshold,
+    )
+    tokenizer = tokenizer_with_max_tokens(models.chunk_size)
+    reader = DoclingDocumentReader(
+        DocumentConverter(format_options=picture.format_options()),
+        HybridChunker(
+            merge_peers=True,
+            # Tables are rendered from TableItem; repeating headers makes fragments.
+            repeat_table_header=False,
+            tokenizer=tokenizer,
+            serializer_provider=MarkdownChunkSerializerProvider(),
         ),
+        max_tokens=models.chunk_size,
+        tokenizer=tokenizer,
+        picture=picture,
     )
     return QdrantIndexer(
         qdrant_url=settings.qdrant.url,

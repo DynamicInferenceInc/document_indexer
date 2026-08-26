@@ -15,10 +15,7 @@ from typing import overload
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 
-from document_indexer.adapters.document_readers import (
-    build_default_document_reader,
-    is_useful_chunk_text,
-)
+from document_indexer.adapters.docling_chunking import is_useful_chunk_text
 from document_indexer.domain.changes import FsChange
 from document_indexer.domain.documents import iter_document_files
 from document_indexer.ports import DocumentReader, Embedder
@@ -40,16 +37,13 @@ class QdrantIndexer:
         qdrant_url: str,
         collection: str,
         embedder: Embedder,
-        document_reader: DocumentReader | None = None,
+        document_reader: DocumentReader,
         allowed_extensions: frozenset[str] | set[str] | None = None,
-        max_tokens: int = 512,
     ) -> None:
         self._client = QdrantClient(url=qdrant_url, check_compatibility=False)
         self._collection = collection
         self._embedder = embedder
-        self._document_reader = document_reader or build_default_document_reader(
-            max_tokens=max_tokens,
-        )
+        self._document_reader = document_reader
         self._allowed_extensions = frozenset(allowed_extensions or ())
 
     @overload
