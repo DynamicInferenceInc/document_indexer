@@ -65,8 +65,8 @@ class DocumentIndexer:
         logger.info(
             "Starting one-shot reindex on %s (qdrant=%s collection=%s)",
             root,
-            self._settings.qdrant_url,
-            self._settings.qdrant_collection,
+            self._settings.qdrant.url,
+            self._settings.qdrant.collection,
         )
         self._core.reindex(str(root))
         logger.info("One-shot reindex complete path=%s", root)
@@ -79,9 +79,9 @@ class DocumentIndexer:
         logger.info(
             "Starting indexer on %s (qdrant=%s collection=%s source=%s)",
             root,
-            self._settings.qdrant_url,
-            self._settings.qdrant_collection,
-            self._settings.source_type,
+            self._settings.qdrant.url,
+            self._settings.qdrant.collection,
+            self._settings.source.kind,
         )
         try:
             self._core.reindex(str(root))
@@ -91,11 +91,12 @@ class DocumentIndexer:
                 return
             raise
 
-        if isinstance(self._settings.source, LocalSourceSettings):
+        source = self._settings.source
+        if isinstance(source, LocalSourceSettings):
             self._debouncer = DebouncedReindex(
                 indexer=self._core,
                 watch_path=str(root),
-                debounce_seconds=self._settings.debounce_seconds,
+                debounce_seconds=source.debounce_seconds,
             )
             self._source.start(self._notify_debounced)
         else:
@@ -207,8 +208,8 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
         ),
     )
     return QdrantIndexer(
-        qdrant_url=settings.qdrant_url,
-        collection=settings.qdrant_collection,
+        qdrant_url=settings.qdrant.url,
+        collection=settings.qdrant.collection,
         embedder=embedder,
         document_reader=reader,
         allowed_extensions=allowed,

@@ -29,9 +29,9 @@ Extras:
 Локальная папка:
 
 ```python
-from document_indexer import DocumentIndexer, IndexerSettings, LocalSourceSettings, QdrantSettings
+from document_indexer import DocumentIndexer, LocalSourceSettings, ProfileLocal, QdrantSettings
 
-settings = IndexerSettings(
+settings = ProfileLocal(
     source=LocalSourceSettings(watch_path="/data/docs"),
     qdrant=QdrantSettings(url="http://127.0.0.1:6333", collection="legal"),
 )
@@ -43,9 +43,9 @@ indexer.run()            # сверка, затем наблюдение до st
 SMB-шара (VPN должен быть уже поднят снаружи модуля):
 
 ```python
-from document_indexer import DocumentIndexer, IndexerSettings, SmbSourceSettings, QdrantSettings
+from document_indexer import DocumentIndexer, ProfileSmb, QdrantSettings, SmbSourceSettings
 
-settings = IndexerSettings(
+settings = ProfileSmb(
     source=SmbSourceSettings(
         server="fileserver",
         share="docs",
@@ -62,17 +62,25 @@ indexer = DocumentIndexer(settings)
 indexer.run()
 ```
 
-Два независимых профиля:
+Два независимых профиля. `IndexerSettings` — общий конструктор: по `source.kind` выбирает local или smb.
 
 ```python
-legal = DocumentIndexer(IndexerSettings(
-    watch_path="/data/legal",
-    qdrant_collection="legal",
+from document_indexer import (
+    DocumentIndexer,
+    LocalSourceSettings,
+    ProfileLocal,
+    ProfileSmb,
+    QdrantSettings,
+    SmbSourceSettings,
+)
+
+legal = DocumentIndexer(ProfileLocal(
+    source=LocalSourceSettings(watch_path="/data/legal"),
+    qdrant=QdrantSettings(collection="legal"),
 ))
-hr = DocumentIndexer(IndexerSettings(
+hr = DocumentIndexer(ProfileSmb(
     source=SmbSourceSettings(...),
-    qdrant_url="http://qdrant-b:6333",
-    qdrant_collection="hr",
+    qdrant=QdrantSettings(url="http://qdrant-b:6333", collection="hr"),
 ))
 ```
 
@@ -80,39 +88,41 @@ hr = DocumentIndexer(IndexerSettings(
 
 ## Конфигурация
 
-`IndexerSettings` читает конструктор, переменные окружения и `.env`. Основные ключи:
+Настройки — вложенные объекты `source`, `qdrant`, `models` на `IndexerSettings`. `ProfileLocal` и `ProfileSmb` фиксируют тип источника. Новый профиль = модель источника с полем `kind` + подкласс `Profile*`.
+
+`IndexerSettings` читает конструктор, переменные окружения и `.env`. Вложенные ключи через `__`:
 
 | Переменная | Смысл | По умолчанию |
 |---|---|---|
-| `SOURCE_TYPE` | `local` или `smb` | `local` |
-| `WATCH_PATH` | локальный корень | `/var/lib/document-indexer/docs` |
-| `DEBOUNCE_SECONDS` | пауза перед apply для local | `1.0` |
-| `SMB_SERVER` / `SMB_SHARE` | хост и имя шары | — |
-| `SMB_USERNAME` / `SMB_PASSWORD` / `SMB_DOMAIN` | учётная запись | — |
-| `SMB_SUBPATH` | каталог внутри шары | пусто (корень шары) |
-| `SMB_STAGING_PATH` | локальное зеркало | `/var/lib/document-indexer/staging` |
-| `SMB_PORT` | порт SMB | `445` |
-| `SMB_TIMEOUT_SEC` | таймаут сессии | `30` |
-| `SMB_POLL_INTERVAL_SEC` | период опроса | `15` |
-| `SMB_MAX_BACKOFF_SEC` | потолок backoff при сбоях | `60` |
-| `QDRANT_URL` / `QDRANT_COLLECTION` | куда писать векторы | `http://127.0.0.1:6333` / `docs` |
-| `OLLAMA_BASE_URL` | embeddings и VLM | `http://127.0.0.1:11434` |
-| `EMBEDDING_MODEL` | модель эмбеддингов | `nomic-embed-text` |
-| `CHUNK_SIZE` | max tokens HybridChunker | `1024` |
-| `PICTURE_DESCRIPTION_ENABLED` | VLM-описания картинок | `true` |
-| `VLM_MODEL` | модель описаний | `qwen3-vl:8b` |
+| `SOURCE__KIND` | `local` или `smb` | `local` |
+| `SOURCE__WATCH_PATH` | локальный корень | `/var/lib/document-indexer/docs` |
+| `SOURCE__DEBOUNCE_SECONDS` | пауза перед apply для local | `1.0` |
+| `SOURCE__SERVER` / `SOURCE__SHARE` | хост и имя шары | — |
+| `SOURCE__USERNAME` / `SOURCE__PASSWORD` / `SOURCE__DOMAIN` | учётная запись | — |
+| `SOURCE__SUBPATH` | каталог внутри шары | пусто (корень шары) |
+| `SOURCE__STAGING_PATH` | локальное зеркало | `/var/lib/document-indexer/staging` |
+| `SOURCE__PORT` | порт SMB | `445` |
+| `SOURCE__TIMEOUT_SEC` | таймаут сессии | `30` |
+| `SOURCE__POLL_INTERVAL_SEC` | период опроса | `15` |
+| `SOURCE__MAX_BACKOFF_SEC` | потолок backoff при сбоях | `60` |
+| `QDRANT__URL` / `QDRANT__COLLECTION` | куда писать векторы | `http://127.0.0.1:6333` / `docs` |
+| `MODELS__OLLAMA_BASE_URL` | embeddings и VLM | `http://127.0.0.1:11434` |
+| `MODELS__EMBEDDING_MODEL` | модель эмбеддингов | `nomic-embed-text` |
+| `MODELS__CHUNK_SIZE` | max tokens HybridChunker | `1024` |
+| `MODELS__PICTURE_DESCRIPTION_ENABLED` | VLM-описания картинок | `true` |
+| `MODELS__VLM_MODEL` | модель описаний | `qwen3-vl:8b` |
 | `INDEX_EXTENSIONS` | суффиксы для индексации (проверка на Docling) | пусто = все поддерживаемые |
 | `LOG_LEVEL` | уровень логов | `INFO` |
 
 Пароль SMB хранится как `SecretStr` и маскируется в `model_dump_safe()`. Не кладите `.env` в git.
 
-Тот же набор доступен вложенными объектами: `LocalSourceSettings`, `SmbSourceSettings`, `QdrantSettings`, `ModelSettings`.
+Тот же набор доступен вложенными объектами: `LocalSourceSettings`, `SmbSourceSettings`, `QdrantSettings`, `ModelSettings`. В Python читайте `settings.source`, `settings.qdrant`, `settings.models`.
 
 ## Источники
 
 Ядро индексатора всегда читает обычные локальные `pathlib.Path`. Источник только готовит это дерево и шлёт `FsChange`.
 
-**local.** watchdog/inotify, debounce и семантика create/modify/delete/move как в исходном reindex. Каталог `WATCH_PATH` должен существовать.
+**local.** watchdog/inotify, debounce и семантика create/modify/delete/move как в исходном reindex. Каталог `SOURCE__WATCH_PATH` должен существовать.
 
 **smb.** Нативный клиент `smbprotocol`, без CIFS-mount и без inotify на шаре. Модуль:
 
@@ -120,9 +130,9 @@ hr = DocumentIndexer(IndexerSettings(
 2. Скачивает файл во временный `.*.tmp` и публикует через `os.replace`.
 3. Перед публикацией повторно читает size/mtime; изменившийся файл не индексируется в этом цикле.
 4. Пишет манифест `.document_indexer_smb_manifest.json` в staging (скрытый, в индекс не попадает).
-5. После первой синхронизации вызывает полный `reindex(staging)`; дальше — `apply_changes`.
+5. После первой синхронизации вызывает полный `index(staging)`; дальше — `index(staging, changes)`.
 
-`source_path` в Qdrant — POSIX-путь относительно `SMB_SUBPATH`, не UNC и не путь staging. Регистр имён сохраняется.
+`source_path` в Qdrant — POSIX-путь относительно `SOURCE__SUBPATH`, не UNC и не путь staging. Регистр имён сохраняется.
 
 ### Нюансы SMB и VPN
 
