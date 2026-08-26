@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
+from typing import overload
 
 import httpx
 
@@ -30,12 +32,21 @@ class OllamaEmbedder:
     def model(self) -> str:
         return self._model
 
-    def embed(self, text: str) -> list[float]:
-        vectors = self.embed_documents([text])
-        return vectors[0]
+    @overload
+    def embed(self, text: str) -> list[float]: ...
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        cleaned = [text.strip() for text in texts]
+    @overload
+    def embed(self, text: Sequence[str]) -> list[list[float]]: ...
+
+    def embed(self, text: str | Sequence[str]) -> list[float] | list[list[float]]:
+        batch = [text] if isinstance(text, str) else list(text)
+        vectors = self._embed_batch(batch)
+        if isinstance(text, str):
+            return vectors[0]
+        return vectors
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        cleaned = [item.strip() for item in texts]
         if not cleaned:
             return []
         if any(not item for item in cleaned):

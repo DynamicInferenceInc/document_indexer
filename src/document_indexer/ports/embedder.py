@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from collections.abc import Sequence
+from typing import Protocol, overload, runtime_checkable
 
 
 @runtime_checkable
 class Embedder(Protocol):
-    """Turn text into a dense vector (and batches of texts into vectors)."""
+    """Turn text into a dense vector, or a batch of texts into vectors."""
 
-    def embed(self, text: str) -> list[float]:
-        """Return one embedding vector for ``text``."""
-        ...
+    @overload
+    def embed(self, text: str) -> list[float]: ...
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Return one embedding vector per item in ``texts``."""
+    @overload
+    def embed(self, text: Sequence[str]) -> list[list[float]]: ...
+
+    def embed(self, text: str | Sequence[str]) -> list[float] | list[list[float]]:
+        """Embed one string or a sequence of strings."""
         ...

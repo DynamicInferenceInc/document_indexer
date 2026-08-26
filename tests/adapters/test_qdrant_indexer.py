@@ -13,12 +13,11 @@ from document_indexer.domain.models import DocumentChunk
 class FakeEmbedder:
     embed_calls = 0
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str | list[str]) -> list[float] | list[list[float]]:
+        if not isinstance(text, str):
+            return [self.embed(item) for item in text]
         type(self).embed_calls += 1
         return [float(len(text) % 7), 1.0, 0.5]
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [self.embed(text) for text in texts]
 
 
 class FakeReader:
@@ -93,11 +92,10 @@ def test_qdrant_indexer_stores_one_table_point_and_aggregates_parts(
             ]
 
     class PartEmbedder:
-        def embed(self, text: str) -> list[float]:
-            return self.embed_documents([text])[0]
-
-        def embed_documents(self, texts: list[str]) -> list[list[float]]:
-            assert texts == ["часть K0", "часть K1"]
+        def embed(self, text: str | list[str]) -> list[float] | list[list[float]]:
+            if isinstance(text, str):
+                return self.embed([text])[0]
+            assert list(text) == ["часть K0", "часть K1"]
             return [[1.0, 0.0], [0.0, 1.0]]
 
     client = _mock_client(exists=False)
@@ -392,7 +390,7 @@ def test_ollama_embedder_batches_documents(monkeypatch) -> None:
 
     monkeypatch.setattr("document_indexer.infra.embeddings.httpx.Client", FakeClient)
     embedder = OllamaEmbedder(base_url="http://ollama:11434")
-    vectors = embedder.embed_documents(["one", "two"])
+    vectors = embedder.embed(["one", "two"])
     assert vectors == [[0.1, 0.2], [0.3, 0.4]]
     assert captured["json"]["input"] == ["one", "two"]
     assert captured["json"]["keep_alive"] == -1

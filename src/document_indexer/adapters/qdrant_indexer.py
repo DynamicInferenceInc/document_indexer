@@ -265,7 +265,7 @@ class QdrantIndexer:
         )
         started = time.perf_counter()
         try:
-            part_vectors = self._embedder.embed_documents(embedding_inputs)
+            part_vectors = self._embedder.embed(embedding_inputs)
         except Exception:
             logger.exception("Failed to embed document %s chunks=%s", relative, len(chunks))
             return None
