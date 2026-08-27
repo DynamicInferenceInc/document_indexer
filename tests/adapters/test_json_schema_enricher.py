@@ -47,6 +47,47 @@ def test_json_schema_enricher_uses_chunk_text_and_drops_extra_keys(tmp_path: Pat
     assert chat.format == SCHEMA
 
 
+def test_ollama_chat_sends_num_ctx(monkeypatch) -> None:
+    captured: dict = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"message": {"content": '{"ok": true}'}}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def post(self, url: str, json: dict):
+            captured["url"] = url
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(
+        "document_indexer.adapters.enrichment.json_schema.httpx.Client",
+        FakeClient,
+    )
+    from document_indexer.adapters.enrichment.json_schema import OllamaChatCompleter
+
+    chat = OllamaChatCompleter(base_url="http://ollama:11434", model="qwen3:4b")
+    result = chat.complete(messages=[{"role": "user", "content": "hi"}], format={"type": "object"})
+    assert result == {"ok": True}
+    assert captured["url"] == "http://ollama:11434/api/chat"
+    assert captured["json"]["think"] is False
+    assert captured["json"]["options"] == {"num_ctx": 16384, "temperature": 0.0}
+    assert captured["json"]["keep_alive"] == -1
+    assert captured["json"]["messages"][0]["content"].startswith("/no_think")
+
+
 def test_json_schema_enricher_returns_empty_on_chat_error(tmp_path: Path) -> None:
     class Boom:
         def complete(self, *, messages, format):
