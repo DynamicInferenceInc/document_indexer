@@ -3,18 +3,31 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from document_indexer.adapters.qdrant.payload import IndexRecord
 
-INDEX_VERSION = "resume-v10"
+INDEX_VERSION = "resume-v11"
 NO_PROJECTS_LABEL = "Проекты не указаны"
 _HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = _HERE / "schema.json"
 PROMPT_PATH = _HERE / "prompt.txt"
 SAMPLE_PATH = _HERE / "sample.md"
+_DATE_POSITION_RE = re.compile(
+    r"\d{4}\s*[-–—]\s*(\d{4}|текущ|н\.?\s*в|настоящ)",
+    re.IGNORECASE,
+)
+_COMPANY_ONLY_RE = re.compile(
+    r"\bг\.\s|.+,\s*(россия|russia)\s*$",
+    re.IGNORECASE,
+)
+_PROJECT_HINT_RE = re.compile(
+    r"(проект|внедрен|переход|миграц|автоматиз|интеграц)",
+    re.IGNORECASE,
+)
 
 
 def load_resume_schema() -> dict[str, Any]:
@@ -30,7 +43,7 @@ def load_resume_sample() -> str:
 
 
 class ResumePayloadBuilder:
-    """Chunk text plus candidate FIO and project fields on every chunk."""
+    """Chunk text plus candidate FIO/title and cleaned project fields."""
 
     index_version = INDEX_VERSION
 
@@ -40,6 +53,7 @@ class ResumePayloadBuilder:
             "text": record.chunk.text,
             "chunk_type": record.chunk.chunk_type,
             "candidate_name": fields.get("candidate_name"),
+            "candidate_position": fields.get("candidate_position"),
             "project_experiences": _project_experiences(fields),
         }
         if record.chunk.headings:
@@ -52,6 +66,7 @@ class ResumePayloadBuilder:
             "file_hash",
             "chunk_type",
             "candidate_name",
+            "candidate_position",
             "project_experiences[].project_description",
             "project_experiences[].project_position",
             "project_experiences[].project_industry",
@@ -59,23 +74,68 @@ class ResumePayloadBuilder:
 
 
 def _project_experiences(fields: dict[str, Any]) -> list[dict[str, Any]]:
+    header_position = fields.get("candidate_position")
     items = [
         item
         for item in (fields.get("project_experiences") or [])
         if isinstance(item, dict)
     ]
-    if not items:
-        return [_no_projects()]
-    if len(items) == 1:
-        only = items[0]
-        if not only.get("project_description") and not only.get("project_industry"):
-            return [_no_projects(only.get("project_position"))]
-    return items
+    cleaned = _drop_header_noise(items)
+    if not cleaned:
+        return [_no_projects(header_position)]
+    if len(cleaned) == 1:
+        only = cleaned[0]
+        if (
+            not only.get("project_description")
+            or only.get("project_description") == NO_PROJECTS_LABEL
+        ) and not only.get("project_industry"):
+            return [_no_projects(only.get("project_position") or header_position)]
+    return cleaned
+
+
+def _drop_header_noise(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop date/company header rows and mashed table cells; keep distinct real projects."""
+    kept: list[dict[str, Any]] = []
+    for item in items:
+        if _is_date_position(item.get("project_position")):
+            continue
+        if _is_company_header(item.get("project_description")):
+            continue
+        kept.append(item)
+    mashed, proper = [], []
+    for item in kept:
+        if _is_mashed_table_row(item):
+            mashed.append(item)
+        else:
+            proper.append(item)
+    return proper or mashed
+
+
+def _is_date_position(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(_DATE_POSITION_RE.search(text))
+
+
+def _is_company_header(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text or _PROJECT_HINT_RE.search(text):
+        return False
+    return bool(_COMPANY_ONLY_RE.search(text))
+
+
+def _is_mashed_table_row(item: dict[str, Any]) -> bool:
+    description = str(item.get("project_description") or "")
+    position = str(item.get("project_position") or "").strip()
+    if len(position) < 8:
+        return False
+    return position.casefold() in description.casefold()
 
 
 def _no_projects(position: Any = None) -> dict[str, Any]:
     return {
         "project_description": NO_PROJECTS_LABEL,
-        "project_position": position,
+        "project_position": position or None,
         "project_industry": None,
     }

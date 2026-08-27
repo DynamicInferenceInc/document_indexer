@@ -32,6 +32,7 @@ class FakeChat:
         assert "Описание проекта" in content
         assert "ведущий консультант" in content
         assert "candidate_name" in format["properties"]
+        assert "candidate_position" in format["properties"]
         project_schema = format["properties"]["project_experiences"]["items"]
         props = project_schema["properties"]
         assert project_schema["additionalProperties"] is False
@@ -40,6 +41,7 @@ class FakeChat:
             assert "enum" not in props[key]
         return {
             "candidate_name": "Иванов Иван",
+            "candidate_position": "ведущий консультант",
             "project_experiences": [
                 {
                     "project_description": (
@@ -104,7 +106,7 @@ class FakeEmbedder:
 def test_resume_schema_defines_filter_fields() -> None:
     schema = load_resume_schema()
     props = schema["properties"]
-    assert tuple(props) == ("candidate_name", "project_experiences")
+    assert tuple(props) == ("candidate_name", "candidate_position", "project_experiences")
     project_props = props["project_experiences"]["items"]["properties"]
     assert set(project_props) == set(_PROJECT_KEYS)
     assert all("enum" not in value for value in project_props.values())
@@ -125,6 +127,7 @@ def test_resume_without_projects_uses_explicit_candidate_position(
             assert "Желаемая должность: ведущий консультант" in text
             return {
                 "candidate_name": "Петров Пётр",
+                "candidate_position": "ведущий консультант",
                 "project_experiences": [
                     {
                         "project_description": NO_PROJECTS_LABEL,
@@ -156,6 +159,7 @@ def test_resume_without_projects_uses_explicit_candidate_position(
     )
     assert fields == {
         "candidate_name": "Петров Пётр",
+        "candidate_position": "ведущий консультант",
         "project_experiences": [
             {
                 "project_description": NO_PROJECTS_LABEL,
@@ -209,7 +213,8 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
         assert third["project_industry"] is None
         assert point.payload["source_path"] == "cv/ivanov.md"
         assert point.payload["candidate_name"] == "Иванов Иван"
-        assert point.payload["index_version"] == "resume-v10"
+        assert point.payload["candidate_position"] == "ведущий консультант"
+        assert point.payload["index_version"] == "resume-v11"
         assert len(point.payload["file_hash"]) == 64
     assert points[0].payload["chunk_index"] == 0
     assert points[1].payload["chunk_index"] == 1
@@ -221,6 +226,7 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
     }
     assert index_names >= {
         "candidate_name",
+        "candidate_position",
         "project_experiences[].project_description",
         "project_experiences[].project_position",
         "project_experiences[].project_industry",
@@ -234,15 +240,101 @@ def test_resume_payload_writes_no_projects_label() -> None:
         file_hash="abc",
         chunk=DocumentChunk(text="навыки"),
         file_path=Path("cv.md"),
-        document_fields={"candidate_name": "Сидоров", "project_experiences": []},
+        document_fields={
+            "candidate_name": "Сидоров",
+            "candidate_position": "Разработчик-стажер",
+            "project_experiences": [],
+        },
         index_version=INDEX_VERSION,
     )
     payload = ResumePayloadBuilder().build(record)
     assert payload["candidate_name"] == "Сидоров"
+    assert payload["candidate_position"] == "Разработчик-стажер"
     assert payload["project_experiences"] == [
         {
             "project_description": NO_PROJECTS_LABEL,
-            "project_position": None,
+            "project_position": "Разработчик-стажер",
             "project_industry": None,
         }
     ]
+
+
+def test_resume_payload_drops_mashed_duplicate_keeps_labeled_description() -> None:
+    record = IndexRecord(
+        source_path="cv.md",
+        chunk_index=0,
+        file_hash="abc",
+        chunk=DocumentChunk(text="table"),
+        file_path=Path("cv.md"),
+        document_fields={
+            "candidate_name": "Шевчик",
+            "candidate_position": None,
+            "project_experiences": [
+                {
+                    "project_description": (
+                        "Джи-Ти-Ай Россия. Консультант по миграции данных "
+                        "Оуществлял перенос данных SAP и 1С:УПП на 1C:ERP УХ"
+                    ),
+                    "project_position": "Консультант по миграции данных",
+                    "project_industry": None,
+                },
+                {
+                    "project_description": (
+                        "Перехода автоматизированной информационной системы "
+                        "управления компанией с SAP ERP и 1С:УПП на 1С:ERP УХ"
+                    ),
+                    "project_position": "Консультант по миграции данных",
+                    "project_industry": None,
+                },
+            ],
+        },
+        index_version=INDEX_VERSION,
+    )
+    payload = ResumePayloadBuilder().build(record)
+    assert payload["project_experiences"] == [
+        {
+            "project_description": (
+                "Перехода автоматизированной информационной системы "
+                "управления компанией с SAP ERP и 1С:УПП на 1С:ERP УХ"
+            ),
+            "project_position": "Консультант по миграции данных",
+            "project_industry": None,
+        }
+    ]
+
+
+def test_resume_payload_drops_date_and_company_header_keeps_real_projects() -> None:
+    sap_mm = "Функциональный консультант SAP MM"
+    record = IndexRecord(
+        source_path="cv.md",
+        chunk_index=0,
+        file_hash="abc",
+        chunk=DocumentChunk(text="cv"),
+        file_path=Path("cv.md"),
+        document_fields={
+            "project_experiences": [
+                {
+                    "project_description": "JTI, г. Санкт – Петербург, Россия",
+                    "project_position": "2025 – текущее время",
+                    "project_industry": None,
+                },
+                {
+                    "project_description": "Проект перехода на SAP S4/HANA",
+                    "project_position": sap_mm,
+                    "project_industry": "Металлургия",
+                },
+                {
+                    "project_description": "Внедрение системы SAP R/3",
+                    "project_position": sap_mm,
+                    "project_industry": "Горнодобывающий комбинат",
+                },
+            ]
+        },
+        index_version=INDEX_VERSION,
+    )
+    experiences = ResumePayloadBuilder().build(record)["project_experiences"]
+    assert [item["project_description"] for item in experiences] == [
+        "Проект перехода на SAP S4/HANA",
+        "Внедрение системы SAP R/3",
+    ]
+    assert all(item["project_position"] == sap_mm for item in experiences)
