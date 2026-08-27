@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -56,6 +57,21 @@ class OllamaChatCompleter:
         format: Mapping[str, Any],
     ) -> dict[str, Any]:
         url = f"{self._base_url}/api/chat"
+        user_chars = sum(
+            len(message.get("content", ""))
+            for message in messages
+            if message.get("role") == "user"
+        )
+        logger.info(
+            "Ollama chat request sent url=%s model=%s num_ctx=%s user_chars=%s timeout=%.0fs",
+            url,
+            self._model,
+            self._num_ctx,
+            user_chars,
+            self._timeout,
+        )
+        _flush_logs()
+        started = time.perf_counter()
         with httpx.Client(timeout=self._timeout) as client:
             response = client.post(
                 url,
@@ -74,6 +90,13 @@ class OllamaChatCompleter:
             )
             response.raise_for_status()
             data = response.json()
+        logger.info(
+            "Ollama chat response received url=%s model=%s status=%s elapsed=%.2fs",
+            url,
+            self._model,
+            getattr(response, "status_code", "?"),
+            time.perf_counter() - started,
+        )
         content = _message_content(data)
         parsed = json.loads(content)
         if not isinstance(parsed, dict):
@@ -120,11 +143,22 @@ class JsonSchemaEnricher:
             {"role": "system", "content": self._prompt},
             {"role": "user", "content": source},
         ]
+        started = time.perf_counter()
+        logger.info("LLM enrich start path=%s chars=%s", path, len(source))
         try:
             raw = self._chat.complete(messages=messages, format=self._schema)
         except Exception:
-            logger.exception("LLM enrich failed path=%s; indexing without extra fields", path)
+            logger.exception(
+                "LLM enrich failed path=%s elapsed=%.2fs; indexing without extra fields",
+                path,
+                time.perf_counter() - started,
+            )
             return {}
+        logger.info(
+            "LLM enrich done path=%s elapsed=%.2fs",
+            path,
+            time.perf_counter() - started,
+        )
         return _project_schema_keys(raw, self._schema)
 
 
@@ -140,6 +174,11 @@ def _project_schema_keys(raw: Mapping[str, Any], schema: Mapping[str, Any]) -> d
     if not isinstance(properties, dict):
         return dict(raw)
     return {key: raw[key] for key in properties if key in raw}
+
+
+def _flush_logs() -> None:
+    for handler in logging.getLogger().handlers:
+        handler.flush()
 
 
 def _with_no_think(messages: list[dict[str, str]]) -> list[dict[str, str]]:

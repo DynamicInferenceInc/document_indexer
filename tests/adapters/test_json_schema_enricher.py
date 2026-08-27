@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
@@ -47,7 +48,7 @@ def test_json_schema_enricher_uses_chunk_text_and_drops_extra_keys(tmp_path: Pat
     assert chat.format == SCHEMA
 
 
-def test_ollama_chat_sends_num_ctx(monkeypatch) -> None:
+def test_ollama_chat_sends_num_ctx(monkeypatch, caplog) -> None:
     captured: dict = {}
 
     class FakeResponse:
@@ -78,6 +79,7 @@ def test_ollama_chat_sends_num_ctx(monkeypatch) -> None:
     )
     from document_indexer.adapters.enrichment.json_schema import OllamaChatCompleter
 
+    caplog.set_level(logging.INFO)
     chat = OllamaChatCompleter(base_url="http://ollama:11434", model="qwen3:4b")
     result = chat.complete(messages=[{"role": "user", "content": "hi"}], format={"type": "object"})
     assert result == {"ok": True}
@@ -86,6 +88,9 @@ def test_ollama_chat_sends_num_ctx(monkeypatch) -> None:
     assert captured["json"]["options"] == {"num_ctx": 16384, "temperature": 0.0}
     assert captured["json"]["keep_alive"] == -1
     assert captured["json"]["messages"][0]["content"].startswith("/no_think")
+    assert "Ollama chat request sent" in caplog.text
+    assert "model=qwen3:4b" in caplog.text
+    assert "Ollama chat response received" in caplog.text
 
 
 def test_json_schema_enricher_returns_empty_on_chat_error(tmp_path: Path) -> None:

@@ -129,6 +129,7 @@ class QdrantIndexer:
         indexed_paths = self._store.scroll_indexed_paths()
 
         skipped = upserted = dup_removed = stale_removed = 0
+        reindex_started = time.perf_counter()
         for relative, content_hash in disk_hashes.items():
             if relative != canonical[content_hash]:
                 if relative in indexed_paths:
@@ -148,12 +149,13 @@ class QdrantIndexer:
 
         logger.info(
             "Qdrant reindex done collection=%s skipped=%s upserted=%s "
-            "dup_removed=%s stale_removed=%s",
+            "dup_removed=%s stale_removed=%s elapsed=%.2fs",
             self._collection,
             skipped,
             upserted,
             dup_removed,
             stale_removed,
+            time.perf_counter() - reindex_started,
         )
 
     def _apply_changes(self, watch_path: str, changes: Sequence[FsChange]) -> None:
@@ -229,30 +231,42 @@ class QdrantIndexer:
                 )
                 return
 
+        started = time.perf_counter()
+        logger.info("Index start source=%s", relative)
         embedded = self._embed_file(path, relative, content_hash)
         if embedded is None:
             logger.error(
-                "Keeping existing Qdrant points after failed indexing source=%s",
+                "Keeping existing Qdrant points after failed indexing source=%s elapsed=%.2fs",
                 relative,
+                time.perf_counter() - started,
             )
             return
         points, vector_size = embedded
         if not points:
             self._store.delete_source(relative)
+            logger.info(
+                "Index done source=%s status=empty elapsed=%.2fs",
+                relative,
+                time.perf_counter() - started,
+            )
             return
         if vector_size is None:
-            logger.error("Missing vector size source=%s; keeping existing points", relative)
+            logger.error(
+                "Missing vector size source=%s; keeping existing points elapsed=%.2fs",
+                relative,
+                time.perf_counter() - started,
+            )
             return
         self._store.ensure_collection(vector_size, self._payload_indexes)
         self._store.delete_source(relative)
-        if points:
-            self._store.upsert(points)
-            logger.info(
-                "Qdrant upserted source=%s points=%s hash=%s",
-                relative,
-                len(points),
-                content_hash[:12],
-            )
+        self._store.upsert(points)
+        logger.info(
+            "Index done source=%s status=upserted points=%s hash=%s elapsed=%.2fs",
+            relative,
+            len(points),
+            content_hash[:12],
+            time.perf_counter() - started,
+        )
 
     def _embed_file(
         self,
@@ -260,11 +274,18 @@ class QdrantIndexer:
         relative: str,
         content_hash: str,
     ) -> tuple[list[qmodels.PointStruct], int | None] | None:
+        read_started = time.perf_counter()
         try:
             chunks = list(self._document_reader.read(path))
         except Exception:
             logger.exception("Failed to read document %s", relative)
             return None
+        logger.info(
+            "Read done path=%s chunks=%s elapsed=%.2fs",
+            relative,
+            len(chunks),
+            time.perf_counter() - read_started,
+        )
 
         chunks = [
             chunk
@@ -275,11 +296,18 @@ class QdrantIndexer:
             logger.info("Skip empty document %s", relative)
             return [], None
 
+        enrich_started = time.perf_counter()
         try:
             document_fields = dict(self._enricher.enrich(path, chunks) or {})
         except Exception:
             logger.exception("Document enrich failed path=%s; indexing without extra fields", relative)
             document_fields = {}
+        logger.info(
+            "Enrich done path=%s fields=%s elapsed=%.2fs",
+            relative,
+            len(document_fields),
+            time.perf_counter() - enrich_started,
+        )
 
         parts_by_chunk = []
         for chunk in chunks:
