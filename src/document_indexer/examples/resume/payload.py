@@ -9,7 +9,8 @@ from typing import Any
 
 from document_indexer.adapters.qdrant.payload import IndexRecord
 
-INDEX_VERSION = "resume-v8"
+INDEX_VERSION = "resume-v10"
+NO_PROJECTS_LABEL = "Проекты не указаны"
 _HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = _HERE / "schema.json"
 PROMPT_PATH = _HERE / "prompt.txt"
@@ -29,7 +30,7 @@ def load_resume_sample() -> str:
 
 
 class ResumePayloadBuilder:
-    """Chunk text plus three exact fields for every resume project."""
+    """Chunk text plus candidate FIO and project fields on every chunk."""
 
     index_version = INDEX_VERSION
 
@@ -38,7 +39,8 @@ class ResumePayloadBuilder:
         payload: dict[str, Any] = {
             "text": record.chunk.text,
             "chunk_type": record.chunk.chunk_type,
-            "project_experiences": list(fields.get("project_experiences") or []),
+            "candidate_name": fields.get("candidate_name"),
+            "project_experiences": _project_experiences(fields),
         }
         if record.chunk.headings:
             payload["headings"] = list(record.chunk.headings)
@@ -49,7 +51,31 @@ class ResumePayloadBuilder:
             "source_path",
             "file_hash",
             "chunk_type",
+            "candidate_name",
             "project_experiences[].project_description",
             "project_experiences[].project_position",
             "project_experiences[].project_industry",
         )
+
+
+def _project_experiences(fields: dict[str, Any]) -> list[dict[str, Any]]:
+    items = [
+        item
+        for item in (fields.get("project_experiences") or [])
+        if isinstance(item, dict)
+    ]
+    if not items:
+        return [_no_projects()]
+    if len(items) == 1:
+        only = items[0]
+        if not only.get("project_description") and not only.get("project_industry"):
+            return [_no_projects(only.get("project_position"))]
+    return items
+
+
+def _no_projects(position: Any = None) -> dict[str, Any]:
+    return {
+        "project_description": NO_PROJECTS_LABEL,
+        "project_position": position,
+        "project_industry": None,
+    }

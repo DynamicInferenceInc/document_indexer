@@ -6,10 +6,12 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
+from document_indexer.adapters.qdrant.payload import IndexRecord
 from document_indexer.adapters.qdrant_indexer import QdrantIndexer
 from document_indexer.domain.models import DocumentChunk
 from document_indexer.examples.resume import (
     INDEX_VERSION,
+    NO_PROJECTS_LABEL,
     ResumePayloadBuilder,
     load_resume_prompt,
     load_resume_sample,
@@ -26,8 +28,10 @@ _PROJECT_KEYS = (
 class FakeChat:
     def complete(self, *, messages, format):
         content = messages[-1]["content"]
+        assert "Имя файла:" in content
         assert "Описание проекта" in content
         assert "ведущий консультант" in content
+        assert "candidate_name" in format["properties"]
         project_schema = format["properties"]["project_experiences"]["items"]
         props = project_schema["properties"]
         assert project_schema["additionalProperties"] is False
@@ -35,6 +39,7 @@ class FakeChat:
         for key in _PROJECT_KEYS:
             assert "enum" not in props[key]
         return {
+            "candidate_name": "Иванов Иван",
             "project_experiences": [
                 {
                     "project_description": (
@@ -67,6 +72,7 @@ class TwoChunkReader:
         return [
             DocumentChunk(
                 text=(
+                    "ФИО: Иванов Иван. "
                     "Описание проекта: внедрение 1С:ЗУП и интеграция с "
                     "SAP S/4HANA. Роль на проекте: ведущий консультант. "
                     "Отрасль проекта: банковский сектор."
@@ -98,7 +104,7 @@ class FakeEmbedder:
 def test_resume_schema_defines_filter_fields() -> None:
     schema = load_resume_schema()
     props = schema["properties"]
-    assert tuple(props) == ("project_experiences",)
+    assert tuple(props) == ("candidate_name", "project_experiences")
     project_props = props["project_experiences"]["items"]["properties"]
     assert set(project_props) == set(_PROJECT_KEYS)
     assert all("enum" not in value for value in project_props.values())
@@ -114,11 +120,14 @@ def test_resume_without_projects_uses_explicit_candidate_position(
     class CandidateOnlyChat:
         def complete(self, *, messages, format):
             del format
-            assert "Желаемая должность: ведущий консультант" in messages[-1]["content"]
+            text = messages[-1]["content"]
+            assert "Имя файла:" in text
+            assert "Желаемая должность: ведущий консультант" in text
             return {
+                "candidate_name": "Петров Пётр",
                 "project_experiences": [
                     {
-                        "project_description": None,
+                        "project_description": NO_PROJECTS_LABEL,
                         "project_position": "ведущий консультант",
                         "project_industry": None,
                     }
@@ -126,7 +135,8 @@ def test_resume_without_projects_uses_explicit_candidate_position(
             }
 
     prompt = load_resume_prompt()
-    assert "Если проекты в резюме не выделены" in prompt
+    assert "Проекты не указаны" in prompt
+    assert "candidate_name" in prompt or "ФИО" in prompt
     enricher = JsonSchemaEnricher(
         load_resume_schema(),
         prompt,
@@ -137,6 +147,7 @@ def test_resume_without_projects_uses_explicit_candidate_position(
         [
             DocumentChunk(
                 text=(
+                    "ФИО: Петров Пётр. "
                     "Желаемая должность: ведущий консультант. "
                     "Навыки: 1С, SQL. Отдельных проектов нет."
                 )
@@ -144,9 +155,10 @@ def test_resume_without_projects_uses_explicit_candidate_position(
         ],
     )
     assert fields == {
+        "candidate_name": "Петров Пётр",
         "project_experiences": [
             {
-                "project_description": None,
+                "project_description": NO_PROJECTS_LABEL,
                 "project_position": "ведущий консультант",
                 "project_industry": None,
             }
@@ -196,7 +208,8 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
         assert third["project_position"] == "backend-разработчик"
         assert third["project_industry"] is None
         assert point.payload["source_path"] == "cv/ivanov.md"
-        assert point.payload["index_version"] == "resume-v8"
+        assert point.payload["candidate_name"] == "Иванов Иван"
+        assert point.payload["index_version"] == "resume-v10"
         assert len(point.payload["file_hash"]) == 64
     assert points[0].payload["chunk_index"] == 0
     assert points[1].payload["chunk_index"] == 1
@@ -207,7 +220,29 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
         call.kwargs["field_name"] for call in client.create_payload_index.call_args_list
     }
     assert index_names >= {
+        "candidate_name",
         "project_experiences[].project_description",
         "project_experiences[].project_position",
         "project_experiences[].project_industry",
     }
+
+
+def test_resume_payload_writes_no_projects_label() -> None:
+    record = IndexRecord(
+        source_path="cv.md",
+        chunk_index=0,
+        file_hash="abc",
+        chunk=DocumentChunk(text="навыки"),
+        file_path=Path("cv.md"),
+        document_fields={"candidate_name": "Сидоров", "project_experiences": []},
+        index_version=INDEX_VERSION,
+    )
+    payload = ResumePayloadBuilder().build(record)
+    assert payload["candidate_name"] == "Сидоров"
+    assert payload["project_experiences"] == [
+        {
+            "project_description": NO_PROJECTS_LABEL,
+            "project_position": None,
+            "project_industry": None,
+        }
+    ]
