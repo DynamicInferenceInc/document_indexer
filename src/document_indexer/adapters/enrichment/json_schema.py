@@ -16,9 +16,10 @@ from document_indexer.domain.models import DocumentChunk
 logger = logging.getLogger(__name__)
 
 _KEEP_ALIVE = -1
-# 16k Cyrillic chars ≈ 2k prompt tokens on qwen3:4b; 80k still fits in 16384 with output.
-_MAX_SOURCE_CHARS = 80_000
-_WINDOW_OVERLAP_CHARS = 2_000
+# Small windows: qwen3:4b with num_ctx=16384 drops the tail of a 70k-char CV
+# if everything is sent in one prompt. Overlap + merge keeps all projects.
+_MAX_SOURCE_CHARS = 16_000
+_WINDOW_OVERLAP_CHARS = 3_000
 _NUM_CTX = 16_384
 _NUM_PREDICT = 4_096
 _TEMPERATURE = 0.0
@@ -201,12 +202,12 @@ class JsonSchemaEnricher:
         index: int,
         total: int,
     ) -> dict[str, Any]:
-        user = window
+        header = f"Имя файла: {path.name}"
         if total > 1:
-            user = f"{_FRAGMENT_HINT.format(index=index, total=total)}\n\n{window}"
+            header = f"{header}\n{_FRAGMENT_HINT.format(index=index, total=total)}"
         messages = [
             {"role": "system", "content": self._prompt},
-            {"role": "user", "content": user},
+            {"role": "user", "content": f"{header}\n\n{window}"},
         ]
         try:
             raw = self._chat.complete(messages=messages, format=self._schema)
