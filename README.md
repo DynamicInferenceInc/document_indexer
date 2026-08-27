@@ -106,8 +106,13 @@ hr = DocumentIndexer(ProfileSmb(
 | `SOURCE__POLL_INTERVAL_SEC` | период опроса | `15` |
 | `SOURCE__MAX_BACKOFF_SEC` | потолок backoff при сбоях | `60` |
 | `QDRANT__URL` / `QDRANT__COLLECTION` | куда писать векторы | `http://127.0.0.1:6333` / `docs` |
-| `MODELS__OLLAMA_BASE_URL` | embeddings и VLM | `http://127.0.0.1:11434` |
+| `QDRANT__EXTRA_PAYLOAD` | JSON-константы на каждую точку | `{}` |
+| `QDRANT__PAYLOAD_INDEXES` | keyword-индексы (через запятую); пусто = индексы builder’а | builder |
+| `QDRANT__DISTANCE` | cosine / dot / euclid | `cosine` |
+| `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = версия builder’а или `table-aware-v2` | пусто |
+| `MODELS__OLLAMA_BASE_URL` | embeddings, VLM, extraction LLM | `http://127.0.0.1:11434` |
 | `MODELS__EMBEDDING_MODEL` | модель эмбеддингов | `nomic-embed-text` |
+| `MODELS__EXTRACTION_MODEL` | text LLM для полей документа (`/api/chat`) | пусто = без enricher |
 | `MODELS__CHUNK_SIZE` | max tokens HybridChunker | `1024` |
 | `MODELS__PICTURE_DESCRIPTION_ENABLED` | VLM-описания картинок | `true` |
 | `MODELS__VLM_MODEL` | модель описаний | `qwen3-vl:8b` |
@@ -145,7 +150,70 @@ hr = DocumentIndexer(ProfileSmb(
 
 ## Совместимость с Qdrant
 
-Payload точек не менялся: `source_path`, `chunk_index`, `text`, `file_hash`, `index_version=table-aware-v2`, поля таблиц. Существующий RAG-клиент может читать коллекции как раньше. Коллекция при reconcile не дропается.
+Payload точек по умолчанию не менялся: `source_path`, `chunk_index`, `text`, `file_hash`, `index_version=table-aware-v2`, поля таблиц. Существующий RAG-клиент может читать коллекции как раньше. Коллекция при reconcile не дропается.
+
+Кастомные поля **добавляются** к этим ключам. Ядро всегда перезаписывает `source_path`, `chunk_index`, `file_hash`, `index_version`.
+
+## Кастомный payload и LLM-поля
+
+`PayloadBuilder` раскладывает уже известные данные по ключам Qdrant. `DocumentEnricher` один раз на файл достаёт поля из текста (не VLM). Resume-схема возвращает `project_experiences`: массив объектов, где каждый объект — отдельный проект и содержит ровно три nullable-поля: `project_description` («Описание проекта» / «Продукт»), `project_position` («Должность на проекте» / «Роль на проекте») и `project_industry` («Отрасль проекта»). Значения копируются из резюме без enum, классификации и догадок; отсутствующее значение — `null`. Если проектных секций нет, возвращается один объект кандидата, а `project_position` берётся из явно указанной общей, текущей или желаемой должности. Пример CV: `examples/resume/sample.md`.
+
+```python
+from document_indexer import DocumentIndexer, JsonSchemaEnricher, ProfileLocal, QdrantSettings
+from document_indexer.examples.resume import (
+    INDEX_VERSION,
+    ResumePayloadBuilder,
+    load_resume_prompt,
+    load_resume_schema,
+)
+
+settings = ProfileLocal(
+    qdrant=QdrantSettings(collection="docs-cv", index_version=INDEX_VERSION),
+    models={"extraction_model": "qwen3:8b"},
+)
+DocumentIndexer(
+    settings,
+    payload_builder=ResumePayloadBuilder(),
+    enricher=JsonSchemaEnricher(
+        load_resume_schema(),
+        load_resume_prompt(),
+        base_url=settings.models.ollama_base_url,
+        model=settings.models.extraction_model,
+    ),
+).run()
+```
+
+Для совместного фильтра по полям **одного проекта** используйте Qdrant nested condition:
+
+```python
+from qdrant_client.http import models as qmodels
+
+project_filter = qmodels.Filter(
+    must=[
+        qmodels.NestedCondition(
+            nested=qmodels.Nested(
+                key="project_experiences",
+                filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="project_position",
+                            match=qmodels.MatchValue(value="архитектор 1С"),
+                        ),
+                        qmodels.FieldCondition(
+                            key="project_industry",
+                            match=qmodels.MatchValue(value="нефтегаз"),
+                        ),
+                    ]
+                ),
+            )
+        )
+    ]
+)
+```
+
+Новая схема — новая коллекция или bump `index_version`, иначе skip по hash не пересчитает поля.
+
+Без `payload_builder` / `enricher` поведение как у исходного reindex.
 
 ## Тесты
 
