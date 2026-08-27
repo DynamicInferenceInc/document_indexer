@@ -16,10 +16,9 @@ from document_indexer.domain.models import DocumentChunk
 logger = logging.getLogger(__name__)
 
 _KEEP_ALIVE = -1
-# Small windows: qwen3:4b with num_ctx=16384 drops the tail of a 70k-char CV
-# if everything is sent in one prompt. Overlap + merge keeps all projects.
-_MAX_SOURCE_CHARS = 16_000
-_WINDOW_OVERLAP_CHARS = 3_000
+# ~20k Cyrillic chars ≈ 2.5k prompt tokens on qwen3:4b; leaves room in 16384 for JSON.
+_MAX_SOURCE_CHARS = 20_000
+_WINDOW_OVERLAP_CHARS = 4_000
 _NUM_CTX = 16_384
 _NUM_PREDICT = 4_096
 _TEMPERATURE = 0.0
