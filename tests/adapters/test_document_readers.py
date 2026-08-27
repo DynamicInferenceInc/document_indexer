@@ -396,7 +396,7 @@ def test_docling_reader_keeps_same_header_tables_separate(tmp_path: Path) -> Non
     assert [chunk.table_ref for chunk in chunks] == ["#/tables/0", "#/tables/1"]
 
 
-def test_docling_reader_rejects_structural_table_without_content(
+def test_docling_reader_skips_structural_table_without_content(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "empty-table.pptx"
@@ -409,8 +409,32 @@ def test_docling_reader_rejects_structural_table_without_content(
     converter.convert.return_value = SimpleNamespace(document=_document(table))
     chunker = _chunker(raws=[raw], rendered={table.self_ref: "|\n|------|------|"})
 
-    with pytest.raises(RuntimeError, match="without useful content"):
-        DoclingDocumentReader(converter=converter, chunker=chunker).read(path)
+    chunks = DoclingDocumentReader(converter=converter, chunker=chunker).read(path)
+    assert chunks == []
+
+
+def test_docling_reader_indexes_when_one_omitted_table_is_empty(tmp_path: Path) -> None:
+    path = tmp_path / "mixed.docx"
+    path.write_bytes(b"PK")
+    useful = _table("#/tables/0")
+    empty = _table("#/tables/1")
+    raw = MagicMock()
+    raw.meta.headings = []
+    raw.meta.doc_items = [useful]
+    converter = MagicMock()
+    converter.convert.return_value = SimpleNamespace(document=_document(useful, empty))
+    markdown = "| A | B |\n|---|---|\n| 1 | 2 |"
+    chunker = _chunker(
+        raws=[raw],
+        rendered={
+            useful.self_ref: markdown,
+            empty.self_ref: "|\n|------|------|",
+        },
+    )
+
+    chunks = DoclingDocumentReader(converter=converter, chunker=chunker).read(path)
+    assert len(chunks) == 1
+    assert chunks[0].table_ref == "#/tables/0"
 
 
 def test_docling_reader_drops_separator_only_non_table_chunk(tmp_path: Path) -> None:

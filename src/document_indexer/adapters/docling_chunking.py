@@ -54,6 +54,7 @@ class TableAwareChunker:
         self._raw_count = 0
         self._table_fragments_dropped = 0
         self._junk_chunks_dropped = 0
+        self._empty_tables_skipped = 0
 
     def run(self) -> list[DocumentChunk]:
         started = time.perf_counter()
@@ -65,13 +66,14 @@ class TableAwareChunker:
         table_chunks = [chunk for chunk in self._chunks if chunk.chunk_type == "table"]
         logger.info(
             "Chunked document path=%s raw=%s stored=%s tables_detected=%s "
-            "tables_emitted=%s table_fragments_dropped=%s junk_chunks_dropped=%s "
-            "elapsed=%.2fs",
+            "tables_emitted=%s empty_tables_skipped=%s table_fragments_dropped=%s "
+            "junk_chunks_dropped=%s elapsed=%.2fs",
             self._path_name,
             self._raw_count,
             len(self._chunks),
             len(self._table_registry),
             len(table_chunks),
+            self._empty_tables_skipped,
             self._table_fragments_dropped,
             self._junk_chunks_dropped,
             time.perf_counter() - started,
@@ -154,10 +156,14 @@ class TableAwareChunker:
         self._table_registry.setdefault(ref, table)
         markdown = _text_from_serialize(self._serializer, table)
         if not is_useful_chunk_text(markdown):
-            raise RuntimeError(
-                f"Docling table rendered without useful content: "
-                f"path={self._path_name} ref={ref}"
+            logger.warning(
+                "Skip empty Docling table path=%s ref=%s; indexing the rest of the document",
+                self._path_name,
+                ref,
             )
+            self._emitted_tables.add(ref)
+            self._empty_tables_skipped += 1
+            return
         caption = item_caption(table, self._document)
         table_chunk = _make_table_chunk(
             markdown=markdown,
@@ -200,7 +206,9 @@ class TableAwareChunker:
             if chunk.table_ref:
                 counts[chunk.table_ref] = counts.get(chunk.table_ref, 0) + 1
         duplicate_refs = sorted(ref for ref, count in counts.items() if count != 1)
-        missing_refs = sorted(set(self._table_registry) - set(counts))
+        missing_refs = sorted(
+            set(self._table_registry) - set(counts) - self._emitted_tables
+        )
         if duplicate_refs or missing_refs:
             raise RuntimeError(
                 f"Table chunk invariant failed path={self._path_name} "
