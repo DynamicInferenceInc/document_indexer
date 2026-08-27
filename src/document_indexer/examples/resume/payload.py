@@ -9,7 +9,7 @@ from typing import Any
 
 from document_indexer.adapters.qdrant.payload import IndexRecord
 
-INDEX_VERSION = "resume-v6"
+INDEX_VERSION = "resume-v7"
 _HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = _HERE / "schema.json"
 PROMPT_PATH = _HERE / "prompt.txt"

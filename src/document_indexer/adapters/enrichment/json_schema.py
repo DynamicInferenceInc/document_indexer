@@ -16,9 +16,18 @@ from document_indexer.domain.models import DocumentChunk
 logger = logging.getLogger(__name__)
 
 _KEEP_ALIVE = -1
-_MAX_SOURCE_CHARS = 24_000
+# Per-window size: leave room in num_ctx for the system prompt and JSON output.
+_MAX_SOURCE_CHARS = 16_000
+_WINDOW_OVERLAP_CHARS = 3_000
 _NUM_CTX = 16_384
+_NUM_PREDICT = 4_096
 _TEMPERATURE = 0.0
+_FRAGMENT_HINT = (
+    "Это фрагмент {index}/{total} длинного документа. "
+    "Извлеки только то, что явно есть в этом фрагменте. "
+    "Если в фрагменте нет проектов, верни пустой массив. "
+    "Не выдумывай один элемент «за кандидата» по фрагменту без проектов."
+)
 
 
 class ChatCompleter(Protocol):
@@ -44,11 +53,13 @@ class OllamaChatCompleter:
         model: str,
         timeout_sec: float = 180.0,
         num_ctx: int = _NUM_CTX,
+        num_predict: int = _NUM_PREDICT,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._timeout = timeout_sec
         self._num_ctx = num_ctx
+        self._num_predict = num_predict
 
     def complete(
         self,
@@ -63,10 +74,12 @@ class OllamaChatCompleter:
             if message.get("role") == "user"
         )
         logger.info(
-            "Ollama chat request sent url=%s model=%s num_ctx=%s user_chars=%s timeout=%.0fs",
+            "Ollama chat request sent url=%s model=%s num_ctx=%s num_predict=%s "
+            "user_chars=%s timeout=%.0fs",
             url,
             self._model,
             self._num_ctx,
+            self._num_predict,
             user_chars,
             self._timeout,
         )
@@ -84,6 +97,7 @@ class OllamaChatCompleter:
                     "think": False,
                     "options": {
                         "num_ctx": self._num_ctx,
+                        "num_predict": self._num_predict,
                         "temperature": _TEMPERATURE,
                     },
                 },
@@ -91,11 +105,15 @@ class OllamaChatCompleter:
             response.raise_for_status()
             data = response.json()
         logger.info(
-            "Ollama chat response received url=%s model=%s status=%s elapsed=%.2fs",
+            "Ollama chat response received url=%s model=%s status=%s elapsed=%.2fs "
+            "prompt_eval_count=%s eval_count=%s done_reason=%s",
             url,
             self._model,
             getattr(response, "status_code", "?"),
             time.perf_counter() - started,
+            data.get("prompt_eval_count") if isinstance(data, dict) else None,
+            data.get("eval_count") if isinstance(data, dict) else None,
+            data.get("done_reason") if isinstance(data, dict) else None,
         )
         content = _message_content(data)
         parsed = json.loads(content)
@@ -105,7 +123,10 @@ class OllamaChatCompleter:
 
 
 class JsonSchemaEnricher:
-    """One LLM call per file: concatenate chunk text, fill schema keys."""
+    """LLM calls per file: concatenate chunk text, fill schema keys.
+
+    Long documents are split into overlapping windows so the tail is not dropped.
+    """
 
     def __init__(
         self,
@@ -118,10 +139,12 @@ class JsonSchemaEnricher:
         timeout_sec: float = 180.0,
         num_ctx: int = _NUM_CTX,
         max_source_chars: int = _MAX_SOURCE_CHARS,
+        overlap_chars: int = _WINDOW_OVERLAP_CHARS,
     ) -> None:
         self._schema = dict(schema)
         self._prompt = prompt.strip()
         self._max_source_chars = max_source_chars
+        self._overlap_chars = overlap_chars
         if chat is not None:
             self._chat = chat
         elif model:
@@ -135,38 +158,85 @@ class JsonSchemaEnricher:
             raise ValueError("JsonSchemaEnricher requires chat= or a non-empty model")
 
     def enrich(self, path: Path, chunks: Sequence[DocumentChunk]) -> dict[str, Any]:
-        source = _join_chunks(chunks, self._max_source_chars)
+        source = _join_chunks(chunks)
         if not source.strip():
             logger.info("Skip enrich empty text path=%s", path)
             return {}
+        windows = _text_windows(source, self._max_source_chars, self._overlap_chars)
+        started = time.perf_counter()
+        logger.info(
+            "LLM enrich start path=%s chars=%s windows=%s window_chars=%s overlap=%s",
+            path,
+            len(source),
+            len(windows),
+            self._max_source_chars,
+            self._overlap_chars,
+        )
+        if len(windows) > 1:
+            logger.info(
+                "LLM enrich split path=%s: sending %s overlapping windows instead of "
+                "truncating the document tail",
+                path,
+                len(windows),
+            )
+        results: list[dict[str, Any]] = []
+        for index, window in enumerate(windows, start=1):
+            projected = self._enrich_window(path, window, index, len(windows))
+            if projected:
+                results.append(projected)
+        logger.info(
+            "LLM enrich done path=%s windows=%s elapsed=%.2fs",
+            path,
+            len(windows),
+            time.perf_counter() - started,
+        )
+        if not results:
+            return {}
+        return _merge_projected(results, self._schema)
+
+    def _enrich_window(
+        self,
+        path: Path,
+        window: str,
+        index: int,
+        total: int,
+    ) -> dict[str, Any]:
+        user = window
+        if total > 1:
+            user = f"{_FRAGMENT_HINT.format(index=index, total=total)}\n\n{window}"
         messages = [
             {"role": "system", "content": self._prompt},
-            {"role": "user", "content": source},
+            {"role": "user", "content": user},
         ]
-        started = time.perf_counter()
-        logger.info("LLM enrich start path=%s chars=%s", path, len(source))
         try:
             raw = self._chat.complete(messages=messages, format=self._schema)
         except Exception:
             logger.exception(
-                "LLM enrich failed path=%s elapsed=%.2fs; indexing without extra fields",
+                "LLM enrich failed path=%s window=%s/%s; continuing with other windows",
                 path,
-                time.perf_counter() - started,
+                index,
+                total,
             )
             return {}
-        logger.info(
-            "LLM enrich done path=%s elapsed=%.2fs",
-            path,
-            time.perf_counter() - started,
-        )
         return _project_schema_keys(raw, self._schema)
 
 
-def _join_chunks(chunks: Sequence[DocumentChunk], limit: int) -> str:
-    text = "\n\n".join(chunk.text.strip() for chunk in chunks if chunk.text.strip())
-    if len(text) <= limit:
-        return text
-    return text[:limit]
+def _join_chunks(chunks: Sequence[DocumentChunk]) -> str:
+    return "\n\n".join(chunk.text.strip() for chunk in chunks if chunk.text.strip())
+
+
+def _text_windows(text: str, size: int, overlap: int) -> list[str]:
+    if size <= 0 or len(text) <= size:
+        return [text]
+    step = max(size - max(overlap, 0), 1)
+    windows: list[str] = []
+    start = 0
+    while start < len(text):
+        windows.append(text[start : start + size])
+        if start + size >= len(text):
+            break
+        start += step
+    return windows
 
 
 def _project_schema_keys(raw: Mapping[str, Any], schema: Mapping[str, Any]) -> dict[str, Any]:
@@ -174,6 +244,53 @@ def _project_schema_keys(raw: Mapping[str, Any], schema: Mapping[str, Any]) -> d
     if not isinstance(properties, dict):
         return dict(raw)
     return {key: raw[key] for key in properties if key in raw}
+
+
+def _merge_projected(results: Sequence[Mapping[str, Any]], schema: Mapping[str, Any]) -> dict[str, Any]:
+    if len(results) == 1:
+        return dict(results[0])
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return dict(results[-1])
+    merged: dict[str, Any] = {}
+    for key, spec in properties.items():
+        if _is_array_spec(spec):
+            items: list[Any] = []
+            for result in results:
+                value = result.get(key)
+                if isinstance(value, list):
+                    items.extend(value)
+            merged[key] = _dedupe_items(items)
+            continue
+        for result in results:
+            if key in result and result[key] not in (None, "", []):
+                merged[key] = result[key]
+                break
+        else:
+            if any(key in result for result in results):
+                merged[key] = next(result[key] for result in results if key in result)
+    return merged
+
+
+def _is_array_spec(spec: object) -> bool:
+    if not isinstance(spec, dict):
+        return False
+    type_value = spec.get("type")
+    if type_value == "array":
+        return True
+    return isinstance(type_value, list) and "array" in type_value
+
+
+def _dedupe_items(items: Sequence[Any]) -> list[Any]:
+    seen: set[str] = set()
+    unique: list[Any] = []
+    for item in items:
+        key = json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
 
 
 def _flush_logs() -> None:

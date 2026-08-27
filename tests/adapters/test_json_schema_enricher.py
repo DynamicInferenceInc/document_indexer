@@ -85,7 +85,11 @@ def test_ollama_chat_sends_num_ctx(monkeypatch, caplog) -> None:
     assert result == {"ok": True}
     assert captured["url"] == "http://ollama:11434/api/chat"
     assert captured["json"]["think"] is False
-    assert captured["json"]["options"] == {"num_ctx": 16384, "temperature": 0.0}
+    assert captured["json"]["options"] == {
+        "num_ctx": 16384,
+        "num_predict": 4096,
+        "temperature": 0.0,
+    }
     assert captured["json"]["keep_alive"] == -1
     assert captured["json"]["messages"][0]["content"].startswith("/no_think")
     assert "Ollama chat request sent" in caplog.text
@@ -104,3 +108,34 @@ def test_json_schema_enricher_returns_empty_on_chat_error(tmp_path: Path) -> Non
         [DocumentChunk(text="Звание: Middle")],
     )
     assert fields == {}
+
+
+def test_json_schema_enricher_windows_long_source_and_merges_arrays(tmp_path: Path) -> None:
+    class RecordingChat:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, *, messages, format):
+            del format
+            self.calls += 1
+            text = messages[-1]["content"]
+            projects = []
+            if "ALPHA_PROJECT" in text:
+                projects.append("alpha")
+            if "BETA_PROJECT" in text:
+                projects.append("beta")
+            return {"grade": "Senior", "projects": projects}
+
+    head = "ALPHA_PROJECT " + ("x" * 80)
+    tail = "BETA_PROJECT " + ("y" * 80)
+    chat = RecordingChat()
+    enricher = JsonSchemaEnricher(
+        SCHEMA,
+        "Extract fields.",
+        chat=chat,
+        max_source_chars=len(head),
+        overlap_chars=10,
+    )
+    fields = enricher.enrich(tmp_path / "cv.md", [DocumentChunk(text=head + tail)])
+    assert chat.calls >= 2
+    assert fields == {"grade": "Senior", "projects": ["alpha", "beta"]}

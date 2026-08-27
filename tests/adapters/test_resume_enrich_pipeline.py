@@ -196,7 +196,7 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
         assert third["project_position"] == "backend-разработчик"
         assert third["project_industry"] is None
         assert point.payload["source_path"] == "cv/ivanov.md"
-        assert point.payload["index_version"] == "resume-v6"
+        assert point.payload["index_version"] == "resume-v7"
         assert len(point.payload["file_hash"]) == 64
     assert points[0].payload["chunk_index"] == 0
     assert points[1].payload["chunk_index"] == 1
