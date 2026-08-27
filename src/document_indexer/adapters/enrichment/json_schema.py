@@ -16,9 +16,9 @@ from document_indexer.domain.models import DocumentChunk
 logger = logging.getLogger(__name__)
 
 _KEEP_ALIVE = -1
-# Per-window size: leave room in num_ctx for the system prompt and JSON output.
-_MAX_SOURCE_CHARS = 16_000
-_WINDOW_OVERLAP_CHARS = 3_000
+# 16k Cyrillic chars ≈ 2k prompt tokens on qwen3:4b; 80k still fits in 16384 with output.
+_MAX_SOURCE_CHARS = 80_000
+_WINDOW_OVERLAP_CHARS = 2_000
 _NUM_CTX = 16_384
 _NUM_PREDICT = 4_096
 _TEMPERATURE = 0.0
@@ -247,8 +247,6 @@ def _project_schema_keys(raw: Mapping[str, Any], schema: Mapping[str, Any]) -> d
 
 
 def _merge_projected(results: Sequence[Mapping[str, Any]], schema: Mapping[str, Any]) -> dict[str, Any]:
-    if len(results) == 1:
-        return dict(results[0])
     properties = schema.get("properties")
     if not isinstance(properties, dict):
         return dict(results[-1])
@@ -282,15 +280,58 @@ def _is_array_spec(spec: object) -> bool:
 
 
 def _dedupe_items(items: Sequence[Any]) -> list[Any]:
-    seen: set[str] = set()
-    unique: list[Any] = []
+    """Drop near-duplicates from overlapping windows (trailing punctuation, slash vs backslash)."""
+    order: list[str] = []
+    chosen: dict[str, Any] = {}
     for item in items:
-        key = json.dumps(item, sort_keys=True, ensure_ascii=False, default=str)
-        if key in seen:
+        key = _item_identity(item)
+        previous = chosen.get(key)
+        if previous is None:
+            order.append(key)
+            chosen[key] = item
             continue
-        seen.add(key)
-        unique.append(item)
-    return unique
+        if _filled_count(item) > _filled_count(previous):
+            chosen[key] = item
+    return [chosen[key] for key in order]
+
+
+def _item_identity(item: Any) -> str:
+    if isinstance(item, dict) and (
+        "project_description" in item or "project_position" in item
+    ):
+        return json.dumps(
+            {
+                "project_description": _norm_text(item.get("project_description")),
+                "project_position": _norm_text(item.get("project_position")),
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+    return json.dumps(_normalize_value(item), sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _normalize_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _norm_text(value)
+    if isinstance(value, list):
+        return [_normalize_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_value(item) for key, item in value.items()}
+    return value
+
+
+def _norm_text(value: object) -> str:
+    if value is None:
+        return ""
+    collapsed = " ".join(str(value).split())
+    collapsed = collapsed.replace("\\\\", "/").replace("\\", "/")
+    return collapsed.strip(" \t.,;:!?…").casefold()
+
+
+def _filled_count(item: Any) -> int:
+    if not isinstance(item, dict):
+        return 0
+    return sum(1 for value in item.values() if value not in (None, "", []))
 
 
 def _flush_logs() -> None:

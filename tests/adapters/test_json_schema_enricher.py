@@ -139,3 +139,38 @@ def test_json_schema_enricher_windows_long_source_and_merges_arrays(tmp_path: Pa
     fields = enricher.enrich(tmp_path / "cv.md", [DocumentChunk(text=head + tail)])
     assert chat.calls >= 2
     assert fields == {"grade": "Senior", "projects": ["alpha", "beta"]}
+
+
+def test_json_schema_enricher_drops_near_duplicate_projects(tmp_path: Path) -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "project_experiences": {"type": "array"},
+        },
+    }
+    first = {
+        "project_description": "Проект перехода с SAP R\\3 на 1C ERP",
+        "project_position": "Консультант по складской логистике (WMS), консультант по направлению запасы",
+        "project_industry": (
+            "Производство и реализации шин для легковых автомобилей, "
+            "грузовиков, автобусов, коммерческого транспорта"
+        ),
+    }
+    duplicate = {
+        **first,
+        "project_industry": first["project_industry"] + ".",
+    }
+    other = {
+        "project_description": "Внедрение системы SAP S4/HANA",
+        "project_position": "Функциональный консультант SAP MM",
+        "project_industry": "Металлургия",
+    }
+
+    class DupChat:
+        def complete(self, *, messages, format):
+            del messages, format
+            return {"project_experiences": [first, other, duplicate]}
+
+    enricher = JsonSchemaEnricher(schema, "Extract fields.", chat=DupChat())
+    fields = enricher.enrich(tmp_path / "cv.md", [DocumentChunk(text="проекты")])
+    assert fields["project_experiences"] == [first, other]
