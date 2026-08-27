@@ -214,7 +214,7 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
         assert point.payload["source_path"] == "cv/ivanov.md"
         assert point.payload["candidate_name"] == "Иванов Иван"
         assert point.payload["candidate_position"] == "ведущий консультант"
-        assert point.payload["index_version"] == "resume-v11"
+        assert point.payload["index_version"] == "resume-v12"
         assert len(point.payload["file_hash"]) == 64
     assert points[0].payload["chunk_index"] == 0
     assert points[1].payload["chunk_index"] == 1
@@ -338,3 +338,61 @@ def test_resume_payload_drops_date_and_company_header_keeps_real_projects() -> N
         "Внедрение системы SAP R/3",
     ]
     assert all(item["project_position"] == sap_mm for item in experiences)
+
+
+def test_resume_payload_merges_typo_copies_and_drops_date_description() -> None:
+    sap_mm = "Функциональный консультант SAP MM"
+    wms = "Консультант по складской логистике (WMS), консультант по направлению запасы"
+    record = IndexRecord(
+        source_path="cv.md",
+        chunk_index=0,
+        file_hash="abc",
+        chunk=DocumentChunk(text="cv"),
+        file_path=Path("cv.md"),
+        document_fields={
+            "project_experiences": [
+                {
+                    "project_description": "Проект перехода с SAP R\\3 на 1C ERP",
+                    "project_position": wms,
+                    "project_industry": "шины",
+                },
+                {
+                    "project_description": "Проект цифровой трансформации",
+                    "project_position": sap_mm,
+                    "project_industry": "Машиностроение",
+                },
+                {
+                    "project_description": "Внедрение системы SAP R/3",
+                    "project_position": sap_mm,
+                    "project_industry": "Горнодобывающий комбинат",
+                },
+                {
+                    "project_description": "22.06.2016-11.06.2017",
+                    "project_position": sap_mm,
+                    "project_industry": "Металлургия",
+                },
+                {
+                    "project_description": "Проект перехода с SAP R\\3 на 1C ERP",
+                    "project_position": (
+                        "Консультант по скласдкой логистике (WMS), "
+                        "консультант по направлению запасы"
+                    ),
+                    "project_industry": "шины.",
+                },
+                {
+                    "project_description": "Проект цифровой трансформации",
+                    "project_position": "Функциона:льный консультант SAP MM",
+                    "project_industry": "Машиностроение",
+                },
+            ]
+        },
+        index_version=INDEX_VERSION,
+    )
+    experiences = ResumePayloadBuilder().build(record)["project_experiences"]
+    assert [item["project_description"] for item in experiences] == [
+        "Проект перехода с SAP R\\3 на 1C ERP",
+        "Проект цифровой трансформации",
+        "Внедрение системы SAP R/3",
+    ]
+    assert experiences[0]["project_position"] == wms
+    assert experiences[1]["project_position"] == sap_mm

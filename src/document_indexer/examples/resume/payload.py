@@ -10,7 +10,7 @@ from typing import Any
 
 from document_indexer.adapters.qdrant.payload import IndexRecord
 
-INDEX_VERSION = "resume-v11"
+INDEX_VERSION = "resume-v12"
 NO_PROJECTS_LABEL = "Проекты не указаны"
 _HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = _HERE / "schema.json"
@@ -20,6 +20,10 @@ _DATE_POSITION_RE = re.compile(
     r"\d{4}\s*[-–—]\s*(\d{4}|текущ|н\.?\s*в|настоящ)",
     re.IGNORECASE,
 )
+_DATE_ONLY_DESC_RE = re.compile(
+    r"^\d{1,2}[./]\d{1,2}[./]\d{2,4}\s*[-–—]\s*\d{1,2}[./]\d{1,2}[./]\d{2,4}$"
+)
+_MESSY_COLON_RE = re.compile(r"[А-Яа-яA-Za-z]{3,}:[А-Яа-яA-Za-z]")
 _COMPANY_ONLY_RE = re.compile(
     r"\bг\.\s|.+,\s*(россия|russia)\s*$",
     re.IGNORECASE,
@@ -80,7 +84,7 @@ def _project_experiences(fields: dict[str, Any]) -> list[dict[str, Any]]:
         for item in (fields.get("project_experiences") or [])
         if isinstance(item, dict)
     ]
-    cleaned = _drop_header_noise(items)
+    cleaned = _dedupe_by_description(_drop_header_noise(items))
     if not cleaned:
         return [_no_projects(header_position)]
     if len(cleaned) == 1:
@@ -99,6 +103,8 @@ def _drop_header_noise(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in items:
         if _is_date_position(item.get("project_position")):
             continue
+        if _is_date_description(item.get("project_description")):
+            continue
         if _is_company_header(item.get("project_description")):
             continue
         kept.append(item)
@@ -109,6 +115,44 @@ def _drop_header_noise(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             proper.append(item)
     return proper or mashed
+
+
+def _dedupe_by_description(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge window copies of the same project; keep distinct descriptions."""
+    order: list[str] = []
+    chosen: dict[str, dict[str, Any]] = {}
+    for item in items:
+        key = _norm_desc(item.get("project_description"))
+        if not key:
+            continue
+        previous = chosen.get(key)
+        if previous is None:
+            order.append(key)
+            chosen[key] = item
+            continue
+        if _item_quality(item) > _item_quality(previous):
+            chosen[key] = item
+    return [chosen[key] for key in order]
+
+
+def _norm_desc(value: object) -> str:
+    collapsed = " ".join(str(value or "").split())
+    collapsed = collapsed.replace("\\\\", "/").replace("\\", "/")
+    return collapsed.strip(" \t.,;:!?…").casefold()
+
+
+def _item_quality(item: dict[str, Any]) -> tuple[int, int, int]:
+    position = str(item.get("project_position") or "")
+    clean_colon = 0 if _MESSY_COLON_RE.search(position) else 1
+    filled = sum(1 for value in item.values() if value not in (None, "", []))
+    return (clean_colon, filled, len(position))
+
+
+def _is_date_description(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text or _PROJECT_HINT_RE.search(text):
+        return False
+    return bool(_DATE_ONLY_DESC_RE.fullmatch(text) or _DATE_POSITION_RE.fullmatch(text))
 
 
 def _is_date_position(value: object) -> bool:
