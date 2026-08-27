@@ -16,6 +16,7 @@ from document_indexer.adapters.docling_convert import (
     MarkdownChunkSerializerProvider,
     tokenizer_with_max_tokens,
 )
+from document_indexer.adapters.qdrant.payload import DEFAULT_INDEX_VERSION, PayloadBuilder
 from document_indexer.adapters.qdrant_indexer import QdrantIndexer
 from document_indexer.config import IndexerSettings, LocalSourceSettings, SmbSourceSettings
 from document_indexer.domain.changes import FsChange
@@ -23,6 +24,7 @@ from document_indexer.domain.documents import resolve_index_extensions
 from document_indexer.infra.embeddings import OllamaEmbedder
 from document_indexer.infra.logging_config import configure_logging
 from document_indexer.ports import Indexer
+from document_indexer.ports.enricher import DocumentEnricher
 from document_indexer.sources.base import DocumentSource
 from document_indexer.sources.debounce import DebouncedReindex
 from document_indexer.sources.local import LocalFilesystemSource
@@ -44,13 +46,19 @@ class DocumentIndexer:
         *,
         indexer: Indexer | None = None,
         source: DocumentSource | None = None,
+        payload_builder: PayloadBuilder | None = None,
+        enricher: DocumentEnricher | None = None,
         configure_logs: bool = True,
     ) -> None:
         self._settings = settings if settings is not None else IndexerSettings()
         if configure_logs:
             configure_logging(self._settings.log_level)
         allowed = _log_extensions(self._settings)
-        self._core = indexer if indexer is not None else build_indexer(self._settings)
+        self._core = indexer if indexer is not None else build_indexer(
+            self._settings,
+            payload_builder=payload_builder,
+            enricher=enricher,
+        )
         self._source = source if source is not None else build_source(
             self._settings,
             allowed_extensions=allowed,
@@ -181,7 +189,12 @@ class DocumentIndexer:
         self._source.stop()
 
 
-def build_indexer(settings: IndexerSettings) -> Indexer:
+def build_indexer(
+    settings: IndexerSettings,
+    *,
+    payload_builder: PayloadBuilder | None = None,
+    enricher: DocumentEnricher | None = None,
+) -> Indexer:
     models = settings.models
     allowed = resolve_index_extensions(settings.index_extensions)
     if models.picture_description_enabled:
@@ -222,12 +235,20 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
         tokenizer=tokenizer,
         picture=picture,
     )
+    builder_version = getattr(payload_builder, "index_version", "") if payload_builder is not None else ""
+    index_version = settings.qdrant.index_version or builder_version or DEFAULT_INDEX_VERSION
     return QdrantIndexer(
         qdrant_url=settings.qdrant.url,
         collection=settings.qdrant.collection,
         embedder=embedder,
         document_reader=reader,
         allowed_extensions=allowed,
+        payload_builder=payload_builder,
+        enricher=enricher,
+        extra_payload=settings.qdrant.extra_payload,
+        payload_indexes=settings.qdrant.payload_indexes,
+        distance=settings.qdrant.distance,
+        index_version=index_version,
     )
 
 

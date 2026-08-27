@@ -10,7 +10,9 @@ import pytest
 from document_indexer import (
     DocumentIndexer,
     IndexerSettings,
+    JsonSchemaEnricher,
     LocalSourceSettings,
+    PayloadBuilder,
     ProfileLocal,
     ProfileSmb,
     QdrantSettings,
@@ -43,6 +45,8 @@ def test_public_exports() -> None:
     assert callable(DocumentIndexer)
     assert issubclass(ProfileLocal, IndexerSettings)
     assert issubclass(ProfileSmb, IndexerSettings)
+    assert JsonSchemaEnricher is not None
+    assert PayloadBuilder is not None
 
 
 def test_reindex_once_uses_watch_path(tmp_path: Path) -> None:

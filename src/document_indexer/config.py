@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
@@ -17,6 +18,28 @@ class QdrantSettings(BaseModel):
 
     url: str = "http://127.0.0.1:6333"
     collection: str = "docs"
+    extra_payload: dict[str, Any] = Field(default_factory=dict)
+    payload_indexes: list[str] | None = None
+    distance: Literal["cosine", "dot", "euclid"] = "cosine"
+    index_version: str = ""
+
+    @field_validator("extra_payload", mode="before")
+    @classmethod
+    def _parse_extra_payload(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return {}
+        if isinstance(value, str):
+            return json.loads(value)
+        return value
+
+    @field_validator("payload_indexes", mode="before")
+    @classmethod
+    def _parse_payload_indexes(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return None
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
 
 class ModelSettings(BaseModel):
@@ -27,6 +50,8 @@ class ModelSettings(BaseModel):
     ollama_base_url: str = "http://127.0.0.1:11434"
     embedding_model: str = "nomic-embed-text"
     embedding_timeout_sec: float = 120.0
+    extraction_model: str = ""
+    extraction_timeout_sec: float = 180.0
     chunk_size: int = 1024
     picture_description_enabled: bool = True
     vlm_model: str = "qwen3-vl:8b"

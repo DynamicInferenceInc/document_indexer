@@ -24,6 +24,7 @@ def test_default_local_profile_matches_original_models() -> None:
     assert settings.qdrant.url == "http://127.0.0.1:6333"
     assert settings.qdrant.collection == "docs"
     assert settings.models.embedding_model == "nomic-embed-text"
+    assert settings.models.extraction_model == ""
     assert settings.models.chunk_size == 1024
     assert settings.models.picture_description_enabled is True
     assert settings.models.vlm_model == "qwen3-vl:8b"
@@ -62,11 +63,19 @@ def test_nested_env(monkeypatch) -> None:
     monkeypatch.setenv("QDRANT__URL", "http://127.0.0.1:6334")
     monkeypatch.setenv("QDRANT__COLLECTION", "hr")
     monkeypatch.setenv("MODELS__EMBEDDING_MODEL", "nomic-embed-text")
+    monkeypatch.setenv("MODELS__EXTRACTION_MODEL", "qwen3:8b")
+    monkeypatch.setenv("QDRANT__EXTRA_PAYLOAD", '{"project":"legal"}')
+    monkeypatch.setenv("QDRANT__PAYLOAD_INDEXES", "source_path,grade")
+    monkeypatch.setenv("QDRANT__INDEX_VERSION", "resume-v1")
     settings = IndexerSettings(_env_file=None)
     assert settings.source.watch_path == "/mnt/docs"
     assert settings.qdrant.url == "http://127.0.0.1:6334"
     assert settings.qdrant.collection == "hr"
     assert settings.models.embedding_model == "nomic-embed-text"
+    assert settings.models.extraction_model == "qwen3:8b"
+    assert settings.qdrant.extra_payload == {"project": "legal"}
+    assert settings.qdrant.payload_indexes == ["source_path", "grade"]
+    assert settings.qdrant.index_version == "resume-v1"
 
 
 def test_smb_source_requires_connection_fields() -> None:
