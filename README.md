@@ -114,6 +114,8 @@ hr = DocumentIndexer(ProfileSmb(
 | `MODELS__EMBEDDING_MODEL` | модель эмбеддингов | `nomic-embed-text` |
 | `MODELS__EXTRACTION_MODEL` | text LLM для полей документа (`/api/chat`) | пусто = без enricher |
 | `MODELS__CHUNK_SIZE` | max tokens HybridChunker | `1024` |
+| `CHUNKING__STRATEGY` | `table_aware` или `resume_project` | `table_aware` |
+| `CHUNKING__WINDOW_CHARS` / `CHUNKING__WINDOW_OVERLAP` | sliding window, если в резюме нет проектов | `1200` / `150` |
 | `MODELS__PICTURE_DESCRIPTION_ENABLED` | VLM-описания картинок | `true` |
 | `MODELS__VLM_MODEL` | модель описаний | `qwen3-vl:8b` |
 | `INDEX_EXTENSIONS` | суффиксы для индексации (проверка на Docling) | пусто = все поддерживаемые |
@@ -156,13 +158,17 @@ Payload точек по умолчанию не менялся: `source_path`, `
 
 ## Кастомный payload и LLM-поля
 
-`PayloadBuilder` раскладывает уже известные данные по ключам Qdrant. `DocumentEnricher` один раз на файл достаёт поля из текста (не VLM). Resume-схема возвращает `project_experiences`: массив объектов, где каждый объект — отдельный проект и содержит ровно три nullable-поля: `project_description` («Описание проекта» / «Продукт»), `project_position` («Должность на проекте» / «Роль на проекте») и `project_industry` («Отрасль проекта»). Значения копируются из резюме без enum, классификации и догадок; отсутствующее значение — `null`. Если проектных секций нет, возвращается один объект кандидата, а `project_position` берётся из явно указанной общей, текущей или желаемой должности. Пример CV: `examples/resume/sample.md`.
+`PayloadBuilder` раскладывает уже известные данные по ключам Qdrant. `DocumentEnricher` достаёт поля из текста (не VLM).
+
+Resume-профиль режет документ так: один проект — один чанк (`chunk_type=project`). Если проектов нет — overlapping windows (`chunk_type=prose`). На каждой точке лежат `candidate_name` и `candidate_position` из шапки (ФИО может быть без подписи). LLM вызывается только для `functional_direction` и только на проектных чанках (роль, иначе выполненные работы). Пример CV: `examples/resume/sample.md`.
 
 ```python
-from document_indexer import DocumentIndexer, JsonSchemaEnricher, ProfileLocal, QdrantSettings
+from document_indexer import DocumentIndexer, ProfileLocal, QdrantSettings
 from document_indexer.examples.resume import (
     INDEX_VERSION,
+    FunctionalDirectionEnricher,
     ResumePayloadBuilder,
+    ResumeProjectChunker,
     load_resume_prompt,
     load_resume_schema,
 )
@@ -170,11 +176,13 @@ from document_indexer.examples.resume import (
 settings = ProfileLocal(
     qdrant=QdrantSettings(collection="docs-cv", index_version=INDEX_VERSION),
     models={"extraction_model": "qwen3:8b"},
+    chunking={"strategy": "resume_project"},
 )
 DocumentIndexer(
     settings,
     payload_builder=ResumePayloadBuilder(),
-    enricher=JsonSchemaEnricher(
+    document_chunker=ResumeProjectChunker(),
+    enricher=FunctionalDirectionEnricher(
         load_resume_schema(),
         load_resume_prompt(),
         base_url=settings.models.ollama_base_url,
@@ -183,30 +191,21 @@ DocumentIndexer(
 ).run()
 ```
 
-Для совместного фильтра по полям **одного проекта** используйте Qdrant nested condition:
+Фильтр по полям одного проекта — обычный `FieldCondition` (массива `project_experiences` больше нет):
 
 ```python
 from qdrant_client.http import models as qmodels
 
 project_filter = qmodels.Filter(
     must=[
-        qmodels.NestedCondition(
-            nested=qmodels.Nested(
-                key="project_experiences",
-                filter=qmodels.Filter(
-                    must=[
-                        qmodels.FieldCondition(
-                            key="project_position",
-                            match=qmodels.MatchValue(value="архитектор 1С"),
-                        ),
-                        qmodels.FieldCondition(
-                            key="project_industry",
-                            match=qmodels.MatchValue(value="нефтегаз"),
-                        ),
-                    ]
-                ),
-            )
-        )
+        qmodels.FieldCondition(
+            key="candidate_name",
+            match=qmodels.MatchValue(value="Иванов Иван Иванович"),
+        ),
+        qmodels.FieldCondition(
+            key="functional_direction",
+            match=qmodels.MatchValue(value="Казначейство"),
+        ),
     ]
 )
 ```
