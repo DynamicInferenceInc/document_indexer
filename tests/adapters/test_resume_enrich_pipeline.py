@@ -172,7 +172,7 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
     assert "project_experiences" not in first.payload
     assert second.payload["functional_direction"] == "архитектура 1С"
     assert second.payload["project_description"] != first.payload["project_description"]
-    assert first.payload["index_version"] == "resume-v15"
+    assert first.payload["index_version"] == "resume-v16"
 
     index_names = {
         call.kwargs["field_name"] for call in client.create_payload_index.call_args_list

@@ -9,7 +9,7 @@ from typing import Any
 
 from document_indexer.adapters.qdrant.payload import IndexRecord
 
-INDEX_VERSION = "resume-v15"
+INDEX_VERSION = "resume-v16"
 _HERE = Path(__file__).resolve().parent
 SCHEMA_PATH = _HERE / "schema.json"
 PROMPT_PATH = _HERE / "prompt.txt"
@@ -70,8 +70,13 @@ class ResumePayloadBuilder:
 
 
 def _functional_direction(record: IndexRecord, extra: dict[str, Any]) -> str | None:
-    directions = record.document_fields.get("functional_directions") or []
-    if record.chunk_index < len(directions) and directions[record.chunk_index]:
-        return directions[record.chunk_index]
-    value = extra.get("functional_direction")
-    return value if value else None
+    fields = record.document_fields
+    directions = fields.get("functional_directions")
+    if isinstance(directions, list) and record.chunk_index < len(directions):
+        value = directions[record.chunk_index]
+        if value not in (None, "", [], "null", "None"):
+            return str(value).strip() or None
+    extra_value = extra.get("functional_direction")
+    if extra_value not in (None, "", [], "null", "None"):
+        return str(extra_value).strip() or None
+    return None

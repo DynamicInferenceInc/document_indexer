@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,13 @@ class FunctionalDirectionEnricher:
             raise ValueError("FunctionalDirectionEnricher requires chat= or a non-empty model")
 
     def enrich(self, path: Path, chunks: Sequence[DocumentChunk]) -> dict[str, Any]:
+        project_count = sum(1 for chunk in chunks if chunk.chunk_type == "project")
+        started = time.perf_counter()
+        logger.info(
+            "Functional direction enrich start path=%s projects=%s",
+            path,
+            project_count,
+        )
         directions: list[str | None] = []
         for chunk in chunks:
             if chunk.chunk_type != "project":
@@ -53,6 +61,14 @@ class FunctionalDirectionEnricher:
                 directions.append(None)
                 continue
             directions.append(self._extract(path, role, work, header_position))
+        filled = sum(1 for value in directions if value)
+        logger.info(
+            "Functional direction enrich done path=%s filled=%s/%s elapsed=%.2fs",
+            path,
+            filled,
+            len(directions),
+            time.perf_counter() - started,
+        )
         return {"functional_directions": directions}
 
     def _extract(
@@ -79,6 +95,6 @@ class FunctionalDirectionEnricher:
             logger.exception("Functional direction failed path=%s", path)
             return None
         value = raw.get("functional_direction") if isinstance(raw, dict) else None
-        if value in (None, "", []):
+        if value in (None, "", [], "null", "None"):
             return None
         return str(value).strip() or None

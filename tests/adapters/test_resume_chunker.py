@@ -255,3 +255,28 @@ def test_projects_drop_header_echo_and_incomplete_duplicates() -> None:
     assert all(item["customer"] not in {None, "Заказчик"} for item in projects)
     assert all(item["project_description"] != "Описание проекта" for item in projects)
     assert len(projects) == 4
+
+
+def test_projects_merge_when_work_performed_only_differs_by_markdown_dashes() -> None:
+    """Docling emits the same project as prose and as a markdown list."""
+    text = """
+Заказчик: ПАО Северсталь
+Отрасль проекта: Металлургия
+Описание проекта: Внедрение системы SAP S4/HANA
+Роль на проекте: Функциональный консультант SAP MM
+Выполненные работы: Область решений: Планирование потребностей Разработка процесса контроля
+
+Заказчик: ПАО Северсталь
+Отрасль проекта: Металлургия
+Описание проекта: Внедрение системы SAP S4/HANA
+Роль на проекте: Функциональный консультант SAP MM
+Выполненные работы:
+- Область решений: Планирование потребностей
+- Разработка процесса контроля
+"""
+    projects = parse_projects(text)
+    assert len(projects) == 1
+    assert projects[0]["customer"] == "ПАО Северсталь"
+    assert projects[0]["project_description"] == "Внедрение системы SAP S4/HANA"
+    assert "Область решений" in (projects[0]["work_performed"] or "")
+    assert "- " not in (projects[0]["work_performed"] or "")

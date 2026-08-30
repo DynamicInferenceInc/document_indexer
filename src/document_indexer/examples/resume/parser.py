@@ -45,6 +45,7 @@ _COMPANY_ONLY = re.compile(r"\bг\.\s|.+,\s*(россия|russia)\s*$", re.I)
 _PROJECT_HINT = re.compile(r"(проект|внедрен|переход|миграц|автоматиз|интеграц)", re.I)
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
 _TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
+_LINE_BULLET = re.compile(r"^(?:[-*•–—]+\s+|\d+[.)]\s+)")
 
 _FIELD_TITLES = {
     "customer": "Заказчик",
@@ -125,19 +126,12 @@ def parse_projects(
     def add(item: dict[str, str | None]) -> None:
         if _is_junk(item):
             return
-        replace_at: int | None = None
+        ident = _project_identity(item)
         for index, existing in enumerate(projects):
-            existing_covers = _covers(existing, item)
-            item_covers = _covers(item, existing)
-            if existing_covers and item_covers:
-                return
-            if existing_covers:
-                return
-            if item_covers:
-                replace_at = index
-                break
-        if replace_at is not None:
-            projects[replace_at] = item
+            same = bool(ident) and ident == _project_identity(existing)
+            if not same and not _covers(existing, item) and not _covers(item, existing):
+                continue
+            projects[index] = _prefer(item, existing)
             return
         projects.append(item)
 
@@ -425,7 +419,13 @@ def _field_key(label: object) -> str | None:
 
 
 def _clean(value: object) -> str | None:
-    text = " ".join(str(value or "").split()).strip(" \t.,;")
+    raw = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    parts = []
+    for line in raw.split("\n"):
+        stripped = _LINE_BULLET.sub("", line.strip())
+        if stripped:
+            parts.append(stripped)
+    text = " ".join(parts).strip(" \t.,;")
     return text or None
 
 
@@ -444,9 +444,41 @@ def _covers(full: dict[str, str | None], part: dict[str, str | None]) -> bool:
         if not value:
             continue
         has_any = True
-        if full.get(key) != value:
+        if _norm_field(full.get(key)) != _norm_field(value):
             return False
     return has_any
+
+
+def _norm_field(value: object) -> str:
+    text = " ".join(str(value or "").split())
+    text = text.replace("\\\\", "/").replace("\\", "/")
+    return text.casefold().strip(" \t.,;:!?…")
+
+
+def _project_identity(item: dict[str, str | None]) -> str:
+    parts = [
+        _norm_field(item.get("customer")),
+        _norm_field(item.get("project_description")),
+        _norm_field(item.get("project_position")),
+    ]
+    return "|".join(parts) if any(parts) else ""
+
+
+def _filled_count(item: dict[str, str | None]) -> int:
+    return sum(1 for value in item.values() if value)
+
+
+def _prefer(
+    left: dict[str, str | None],
+    right: dict[str, str | None],
+) -> dict[str, str | None]:
+    left_n = _filled_count(left)
+    right_n = _filled_count(right)
+    if left_n != right_n:
+        return left if left_n > right_n else right
+    left_len = sum(len(value or "") for value in left.values())
+    right_len = sum(len(value or "") for value in right.values())
+    return left if left_len >= right_len else right
 
 
 def _is_junk(item: dict[str, str | None]) -> bool:
