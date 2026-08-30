@@ -6,8 +6,10 @@ from typing import Any
 
 from document_indexer.domain.models import DocumentChunk
 from document_indexer.examples.resume.parser import (
+    document_tables,
     document_text,
     format_project_text,
+    infer_functional_direction,
     parse_header,
     parse_projects,
 )
@@ -33,7 +35,7 @@ class ResumeProjectChunker:
         del path_name
         text = document_text(document)
         header = parse_header(text)
-        projects = parse_projects(text)
+        projects = parse_projects(text, tables=document_tables(document))
         if projects:
             return [_project_chunk(header, project) for project in projects]
         return [
@@ -57,6 +59,10 @@ def _project_chunk(
         "project_description": project.get("project_description"),
         "project_position": project.get("project_position"),
         "work_performed": project.get("work_performed"),
+        "functional_direction": infer_functional_direction(
+            project.get("project_position"),
+            project.get("work_performed"),
+        ),
     }
     return DocumentChunk(
         text=format_project_text(project),

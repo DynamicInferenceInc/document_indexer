@@ -9,6 +9,7 @@ from typing import Any
 
 from document_indexer.adapters.enrichment.json_schema import ChatCompleter, OllamaChatCompleter
 from document_indexer.domain.models import DocumentChunk
+from document_indexer.examples.resume.parser import infer_functional_direction
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,11 @@ class FunctionalDirectionEnricher:
             if not role and not work:
                 directions.append(None)
                 continue
-            directions.append(self._extract(path, role, work))
+            directions.append(
+                self._extract(path, role, work)
+                or extra.get("functional_direction")
+                or infer_functional_direction(role, work)
+            )
         return {"functional_directions": directions}
 
     def _extract(self, path: Path, role: object, work: object) -> str | None:
