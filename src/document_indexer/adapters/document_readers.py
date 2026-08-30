@@ -11,13 +11,14 @@ from typing import Any
 
 import requests
 
-from document_indexer.adapters.docling_chunking import TableAwareChunker
+from document_indexer.adapters.docling_chunking import TableAwareDocumentChunker
 from document_indexer.adapters.docling_convert import (
     PictureDescriptionConfig,
     picture_description,
 )
 from document_indexer.domain.formats import SUPPORTED_SUFFIXES
 from document_indexer.domain.models import DocumentChunk
+from document_indexer.ports.chunker import DocumentChunker
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class DoclingDocumentReader:
         converter: Any,
         chunker: Any,
         *,
+        document_chunker: DocumentChunker | None = None,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
         tokenizer: Any | None = None,
         picture: PictureDescriptionConfig | None = None,
@@ -47,6 +49,11 @@ class DoclingDocumentReader:
         self._max_tokens = max_tokens
         self._tokenizer = tokenizer
         self._picture = picture or PictureDescriptionConfig()
+        self._document_chunker = document_chunker or TableAwareDocumentChunker(
+            chunker=chunker,
+            max_tokens=max_tokens,
+            tokenizer=tokenizer,
+        )
 
     def read(self, path: Path) -> list[DocumentChunk]:
         if path.suffix.lower() not in SUPPORTED_SUFFIXES:
@@ -71,13 +78,9 @@ class DoclingDocumentReader:
             described,
             skipped,
         )
-        return TableAwareChunker(
-            result.document,
-            chunker=self._chunker,
-            max_tokens=self._max_tokens,
-            tokenizer=self._tokenizer,
-            path_name=path.name,
-        ).run()
+        return list(
+            self._document_chunker.chunk_document(result.document, path_name=path.name)
+        )
 
 
 @contextmanager

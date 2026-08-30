@@ -7,11 +7,13 @@ import signal
 import threading
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from docling.chunking import HybridChunker
 from docling.document_converter import DocumentConverter
 
 from document_indexer.adapters.document_readers import DoclingDocumentReader, PictureDescriptionConfig
+from document_indexer.adapters.docling_chunking import TableAwareDocumentChunker
 from document_indexer.adapters.docling_convert import (
     MarkdownChunkSerializerProvider,
     tokenizer_with_max_tokens,
@@ -24,6 +26,7 @@ from document_indexer.domain.documents import resolve_index_extensions
 from document_indexer.infra.embeddings import OllamaEmbedder
 from document_indexer.infra.logging_config import configure_logging
 from document_indexer.ports import Indexer
+from document_indexer.ports.chunker import DocumentChunker
 from document_indexer.ports.enricher import DocumentEnricher
 from document_indexer.sources.base import DocumentSource
 from document_indexer.sources.debounce import DebouncedReindex
@@ -48,6 +51,7 @@ class DocumentIndexer:
         source: DocumentSource | None = None,
         payload_builder: PayloadBuilder | None = None,
         enricher: DocumentEnricher | None = None,
+        document_chunker: DocumentChunker | None = None,
         configure_logs: bool = True,
     ) -> None:
         self._settings = settings if settings is not None else IndexerSettings()
@@ -58,6 +62,7 @@ class DocumentIndexer:
             self._settings,
             payload_builder=payload_builder,
             enricher=enricher,
+            document_chunker=document_chunker,
         )
         self._source = source if source is not None else build_source(
             self._settings,
@@ -194,8 +199,10 @@ def build_indexer(
     *,
     payload_builder: PayloadBuilder | None = None,
     enricher: DocumentEnricher | None = None,
+    document_chunker: DocumentChunker | None = None,
 ) -> Indexer:
     models = settings.models
+    chunking = settings.chunking
     allowed = resolve_index_extensions(settings.index_extensions)
     if models.picture_description_enabled:
         logger.info(
@@ -222,15 +229,19 @@ def build_indexer(
         area_threshold=models.picture_area_threshold,
     )
     tokenizer = tokenizer_with_max_tokens(models.chunk_size)
+    hybrid = HybridChunker(
+        merge_peers=chunking.merge_peers,
+        # Tables are rendered from TableItem; repeating headers makes fragments.
+        repeat_table_header=chunking.repeat_table_header,
+        tokenizer=tokenizer,
+        serializer_provider=MarkdownChunkSerializerProvider(),
+    )
+    if document_chunker is None:
+        document_chunker = _build_document_chunker(settings, hybrid, tokenizer)
     reader = DoclingDocumentReader(
         DocumentConverter(format_options=picture.format_options()),
-        HybridChunker(
-            merge_peers=True,
-            # Tables are rendered from TableItem; repeating headers makes fragments.
-            repeat_table_header=False,
-            tokenizer=tokenizer,
-            serializer_provider=MarkdownChunkSerializerProvider(),
-        ),
+        hybrid,
+        document_chunker=document_chunker,
         max_tokens=models.chunk_size,
         tokenizer=tokenizer,
         picture=picture,
@@ -249,6 +260,26 @@ def build_indexer(
         payload_indexes=settings.qdrant.payload_indexes,
         distance=settings.qdrant.distance,
         index_version=index_version,
+    )
+
+
+def _build_document_chunker(
+    settings: IndexerSettings,
+    hybrid: Any,
+    tokenizer: Any,
+) -> DocumentChunker:
+    chunking = settings.chunking
+    if chunking.strategy == "resume_project":
+        from document_indexer.examples.resume.chunker import ResumeProjectChunker
+
+        return ResumeProjectChunker(
+            window_chars=chunking.window_chars,
+            window_overlap=chunking.window_overlap,
+        )
+    return TableAwareDocumentChunker(
+        chunker=hybrid,
+        max_tokens=settings.models.chunk_size,
+        tokenizer=tokenizer,
     )
 
 

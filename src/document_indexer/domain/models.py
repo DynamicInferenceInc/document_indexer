@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,3 +17,4 @@ class DocumentChunk:
     table_ref: str | None = None
     embedding_parts: tuple[str, ...] = ()
     row_count: int = 0
+    extra_fields: dict[str, Any] = field(default_factory=dict)

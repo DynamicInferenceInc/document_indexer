@@ -3,6 +3,7 @@
 from document_indexer.adapters.enrichment import JsonSchemaEnricher, NoopEnricher
 from document_indexer.adapters.qdrant.payload import DefaultPayloadBuilder, IndexRecord, PayloadBuilder
 from document_indexer.config import (
+    ChunkingSettings,
     IndexerSettings,
     LocalSourceSettings,
     ModelSettings,
@@ -16,6 +17,7 @@ from document_indexer.indexer import DocumentIndexer, reindex_once, run
 __version__ = "0.1.0"
 
 __all__ = [
+    "ChunkingSettings",
     "DefaultPayloadBuilder",
     "DocumentIndexer",
     "IndexRecord",

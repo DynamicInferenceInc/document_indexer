@@ -31,6 +31,8 @@ def test_default_local_profile_matches_original_models() -> None:
     assert settings.models.vlm_timeout_sec == 90.0
     assert settings.models.vlm_concurrency == 2
     assert settings.models.picture_area_threshold == 0.02
+    assert settings.chunking.strategy == "table_aware"
+    assert settings.chunking.window_chars == 1200
 
 
 def test_profile_local_is_indexer_settings() -> None:
@@ -67,6 +69,7 @@ def test_nested_env(monkeypatch) -> None:
     monkeypatch.setenv("QDRANT__EXTRA_PAYLOAD", '{"project":"legal"}')
     monkeypatch.setenv("QDRANT__PAYLOAD_INDEXES", "source_path,grade")
     monkeypatch.setenv("QDRANT__INDEX_VERSION", "resume-v1")
+    monkeypatch.setenv("CHUNKING__STRATEGY", "resume_project")
     settings = IndexerSettings(_env_file=None)
     assert settings.source.watch_path == "/mnt/docs"
     assert settings.qdrant.url == "http://127.0.0.1:6334"
@@ -76,6 +79,7 @@ def test_nested_env(monkeypatch) -> None:
     assert settings.qdrant.extra_payload == {"project": "legal"}
     assert settings.qdrant.payload_indexes == ["source_path", "grade"]
     assert settings.qdrant.index_version == "resume-v1"
+    assert settings.chunking.strategy == "resume_project"
 
 
 def test_smb_source_requires_connection_fields() -> None:

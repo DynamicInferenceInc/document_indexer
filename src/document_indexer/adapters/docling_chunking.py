@@ -531,3 +531,21 @@ def _is_table_row(line: str) -> bool:
 
 def _is_table_sep(line: str) -> bool:
     return bool(_TABLE_SEP_RE.match(line.strip()))
+
+
+class TableAwareDocumentChunker:
+    """DocumentChunker wrapper around :class:`TableAwareChunker`."""
+
+    def __init__(self, *, chunker: Any, max_tokens: int, tokenizer: Any | None = None) -> None:
+        self._chunker = chunker
+        self._max_tokens = max_tokens
+        self._tokenizer = tokenizer
+
+    def chunk_document(self, document: Any, *, path_name: str) -> list[DocumentChunk]:
+        return TableAwareChunker(
+            document,
+            chunker=self._chunker,
+            max_tokens=self._max_tokens,
+            tokenizer=self._tokenizer,
+            path_name=path_name,
+        ).run()

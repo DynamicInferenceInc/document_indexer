@@ -60,6 +60,18 @@ class ModelSettings(BaseModel):
     picture_area_threshold: float = 0.02
 
 
+class ChunkingSettings(BaseModel):
+    """Which chunker to use and sliding-window size for resume fallback."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: Literal["table_aware", "resume_project"] = "table_aware"
+    merge_peers: bool = True
+    repeat_table_header: bool = False
+    window_chars: int = 1200
+    window_overlap: int = 150
+
+
 class LocalSourceSettings(BaseModel):
     """Watch a local directory with inotify/watchdog events."""
 
@@ -121,6 +133,7 @@ class IndexerSettings(BaseSettings):
     )
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
     models: ModelSettings = Field(default_factory=ModelSettings)
+    chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     index_extensions: str = Field(
         default="",
         description=(
