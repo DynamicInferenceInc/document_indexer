@@ -28,11 +28,17 @@ class FakeChat:
         assert "Имя файла:" in content
         assert "candidate_name" not in format["properties"]
         assert "functional_direction" in format["properties"]
+        assert "solution_platform" in format["properties"]
+        platform = None
+        if "SAP" in content:
+            platform = "SAP"
+        elif "1С" in content or "1C" in content:
+            platform = "1С"
         if "Казначейство" in content:
-            return {"functional_direction": "Казначейство"}
+            return {"functional_direction": "Казначейство", "solution_platform": platform}
         if "архитектор" in content:
-            return {"functional_direction": "архитектура 1С"}
-        return {"functional_direction": None}
+            return {"functional_direction": "архитектура 1С", "solution_platform": platform}
+        return {"functional_direction": None, "solution_platform": platform}
 
 
 class ProjectReader:
@@ -73,9 +79,9 @@ class FakeEmbedder:
         return [[float(len(item)), 1.0] for item in text]
 
 
-def test_resume_schema_is_functional_direction_only() -> None:
+def test_resume_schema_has_direction_and_platform() -> None:
     schema = load_resume_schema()
-    assert tuple(schema["properties"]) == ("functional_direction",)
+    assert tuple(schema["properties"]) == ("functional_direction", "solution_platform")
     sample = load_resume_sample()
     assert "1С:ERP" in sample
     assert "ведущий консультант" in sample
@@ -101,7 +107,7 @@ def test_resume_payload_skips_llm_for_window_chunks() -> None:
             )
         ],
     )
-    assert fields == {"functional_directions": [None]}
+    assert fields == {"functional_directions": [None], "solution_platforms": [None]}
     assert chat.calls == []
 
 
@@ -126,7 +132,7 @@ def test_resume_enricher_always_calls_llm_for_project_role() -> None:
             )
         ],
     )
-    assert fields == {"functional_directions": ["Казначейство"]}
+    assert fields == {"functional_directions": ["Казначейство"], "solution_platforms": [None]}
     assert len(chat.calls) == 1
     assert "Роль на проекте: Консультант по направлению Казначейство" in chat.calls[0]
     assert "Должность из шапки: Ведущий консультант" in chat.calls[0]
@@ -168,11 +174,13 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
     assert first.payload["candidate_position"] == "ведущий консультант"
     assert first.payload["project_position"] == "Консультант по направлению Казначейство"
     assert first.payload["functional_direction"] == "Казначейство"
+    assert first.payload["solution_platform"] == "1С"
     assert first.payload["project_industry"] == "банковский сектор"
     assert "project_experiences" not in first.payload
     assert second.payload["functional_direction"] == "архитектура 1С"
+    assert second.payload["solution_platform"] == "1С"
     assert second.payload["project_description"] != first.payload["project_description"]
-    assert first.payload["index_version"] == "resume-v17"
+    assert first.payload["index_version"] == "resume-v18"
 
     index_names = {
         call.kwargs["field_name"] for call in client.create_payload_index.call_args_list
@@ -184,6 +192,7 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
         "project_position",
         "project_industry",
         "functional_direction",
+        "solution_platform",
     }
 
 
@@ -210,6 +219,7 @@ def test_resume_payload_window_has_name_and_position_without_project_fields() ->
     assert "project_experiences" not in payload
     assert "project_industry" not in payload
     assert payload["functional_direction"] is None
+    assert "solution_platform" not in payload
 
 
 def test_bind_replaces_json_schema_enricher_for_resume_strategy() -> None:
@@ -239,3 +249,42 @@ def test_bind_keeps_json_schema_enricher_for_table_aware() -> None:
     )
     incoming = JsonSchemaEnricher(load_resume_schema(), load_resume_prompt(), chat=FakeChat())
     assert bind_resume_enricher(settings, incoming) is incoming
+
+
+def test_infer_solution_platform_explicit_and_transition() -> None:
+    from document_indexer.examples.resume.enricher import infer_solution_platform
+
+    assert infer_solution_platform("Функциональный консультант SAP MM") == "SAP"
+    assert infer_solution_platform("Внедрение 1С:ERP") == "1С"
+    assert infer_solution_platform("архитектор 1С") == "1С"
+    assert infer_solution_platform(
+        "Проект перехода с SAP R/3 на 1C ERP"
+    ) == "1С"
+    assert infer_solution_platform("внедрение 1С:ЗУП и интеграция с SAP S/4HANA") is None
+    assert infer_solution_platform("настройка казначейства") is None
+
+
+def test_explicit_sap_still_calls_llm_for_direction() -> None:
+    chat = FakeChat()
+    enricher = FunctionalDirectionEnricher(
+        load_resume_schema(),
+        load_resume_prompt(),
+        chat=chat,
+    )
+    fields = enricher.enrich(
+        Path("cv.md"),
+        [
+            DocumentChunk(
+                text="роль",
+                chunk_type="project",
+                extra_fields={
+                    "project_position": "Функциональный консультант SAP MM",
+                    "project_description": "Внедрение системы SAP S4/HANA",
+                    "work_performed": "настройка MM",
+                },
+            )
+        ],
+    )
+    assert fields["solution_platforms"] == ["SAP"]
+    assert len(chat.calls) == 1
+    assert "SAP MM" in chat.calls[0]
