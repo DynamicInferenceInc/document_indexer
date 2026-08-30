@@ -104,21 +104,20 @@ def parse_projects(text: str) -> list[dict[str, str | None]]:
     """One dict per project from markdown tables or labeled blocks."""
     projects: list[dict[str, str | None]] = []
     seen: set[str] = set()
-    for table in _markdown_tables(text):
-        for item in _projects_from_table(table):
-            key = _project_key(item)
-            if key in seen or _is_junk(item):
-                continue
-            seen.add(key)
-            projects.append(item)
-    if projects:
-        return projects
-    for item in _projects_from_blocks(text):
+
+    def add(item: dict[str, str | None]) -> None:
         key = _project_key(item)
         if key in seen or _is_junk(item):
-            continue
+            return
         seen.add(key)
         projects.append(item)
+
+    for table in _markdown_tables(text):
+        for item in _projects_from_table(table):
+            add(item)
+    if not projects:
+        for item in _projects_from_blocks(text):
+            add(item)
     return projects
 
 
@@ -194,17 +193,7 @@ def _projects_from_table(rows: list[list[str]]) -> list[dict[str, str | None]]:
     col_hits = sum(1 for key in first_col_labels if key)
     row_hits = sum(1 for key in first_row_labels if key)
     if col_hits >= _MIN_PROJECT_LABELS and col_hits >= row_hits:
-        width = len(rows[0])
-        projects = []
-        for column in range(1, width):
-            item: dict[str, str | None] = {field: None for field in _FIELD_TITLES}
-            for row in rows:
-                field = _field_key(row[0])
-                if not field:
-                    continue
-                item[field] = _clean(row[column] if column < len(row) else "")
-            projects.append(item)
-        return projects
+        return _projects_from_label_column(rows)
     if row_hits >= _MIN_PROJECT_LABELS:
         fields = first_row_labels
         projects = []
@@ -217,6 +206,28 @@ def _projects_from_table(rows: list[list[str]]) -> list[dict[str, str | None]]:
             projects.append(item)
         return projects
     return []
+
+
+def _projects_from_label_column(rows: list[list[str]]) -> list[dict[str, str | None]]:
+    """Each extra column is a project. Repeated labels start the next stacked project."""
+    width = len(rows[0])
+    projects: list[dict[str, str | None]] = []
+    for column in range(1, width):
+        current: dict[str, str | None] | None = None
+        for row in rows:
+            field = _field_key(row[0])
+            if not field:
+                continue
+            value = _clean(row[column] if column < len(row) else "")
+            if current is None or current.get(field):
+                if current:
+                    projects.append(current)
+                current = {key: None for key in _FIELD_TITLES}
+            if value:
+                current[field] = value
+        if current:
+            projects.append(current)
+    return projects
 
 
 def _projects_from_blocks(text: str) -> list[dict[str, str | None]]:
