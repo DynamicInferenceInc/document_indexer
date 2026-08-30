@@ -125,13 +125,24 @@ def parse_projects(
 ) -> list[dict[str, str | None]]:
     """One dict per project from Docling grids, markdown tables or labeled lines."""
     projects: list[dict[str, str | None]] = []
-    seen: set[str] = set()
 
     def add(item: dict[str, str | None]) -> None:
-        key = _project_key(item)
-        if key in seen or _is_junk(item):
+        if _is_junk(item):
             return
-        seen.add(key)
+        replace_at: int | None = None
+        for index, existing in enumerate(projects):
+            existing_covers = _covers(existing, item)
+            item_covers = _covers(item, existing)
+            if existing_covers and item_covers:
+                return
+            if existing_covers:
+                return
+            if item_covers:
+                replace_at = index
+                break
+        if replace_at is not None:
+            projects[replace_at] = item
+            return
         projects.append(item)
 
     for table in list(tables or []) + _markdown_tables(text):
@@ -311,11 +322,13 @@ def _projects_from_table(rows: list[list[str]]) -> list[dict[str, str | None]]:
         fields = first_row_labels
         projects = []
         for row in rows[1:]:
+            if sum(1 for cell in row if _field_key(cell)) >= _MIN_PROJECT_LABELS:
+                continue
             item = {field: None for field in _FIELD_TITLES}
             for column, field in enumerate(fields):
                 if not field or column >= len(row):
                     continue
-                item[field] = _clean(row[column])
+                item[field] = _cell_value(row[column])
             projects.append(item)
         return projects
     return []
@@ -331,7 +344,7 @@ def _projects_from_label_column(rows: list[list[str]]) -> list[dict[str, str | N
             field = _field_key(row[0])
             if not field:
                 continue
-            value = _clean(row[column] if column < len(row) else "")
+            value = _cell_value(row[column] if column < len(row) else "")
             if current is None or current.get(field):
                 if current:
                     projects.append(current)
@@ -355,7 +368,7 @@ def _projects_from_alternating_cells(cells: list[str]) -> list[dict[str, str | N
             continue
         value = None
         if index + 1 < len(cells) and not _field_key(cells[index + 1]):
-            value = _clean(cells[index + 1])
+            value = _cell_value(cells[index + 1])
             index += 2
         else:
             index += 1
@@ -387,7 +400,7 @@ def _projects_from_blocks(text: str) -> list[dict[str, str | None]]:
         if pending_field and not field:
             if current is None:
                 current = {key: None for key in _FIELD_TITLES}
-            current[pending_field] = _clean(line)
+            current[pending_field] = _cell_value(line)
             pending_field = None
             continue
         if not field:
@@ -397,8 +410,9 @@ def _projects_from_blocks(text: str) -> list[dict[str, str | None]]:
             if current:
                 projects.append(current)
             current = {key: None for key in _FIELD_TITLES}
-        if value:
-            current[field] = value
+        real = _cell_value(value)
+        if real:
+            current[field] = real
             pending_field = None
         else:
             pending_field = field
@@ -432,11 +446,24 @@ def _clean(value: object) -> str | None:
     return text or None
 
 
-def _project_key(item: dict[str, str | None]) -> str:
-    return "|".join(
-        str(item.get(key) or "").casefold()
-        for key in ("customer", "project_description", "project_position")
-    )
+def _cell_value(value: object) -> str | None:
+    """Drop empty cells and copies of the field title (table header echoed as data)."""
+    cleaned = _clean(value)
+    if not cleaned or _field_key(cleaned) is not None:
+        return None
+    return cleaned
+
+
+def _covers(full: dict[str, str | None], part: dict[str, str | None]) -> bool:
+    """True if ``full`` has every filled field of ``part`` with the same value."""
+    has_any = False
+    for key, value in part.items():
+        if not value:
+            continue
+        has_any = True
+        if full.get(key) != value:
+            return False
+    return has_any
 
 
 def _is_junk(item: dict[str, str | None]) -> bool:
@@ -446,13 +473,16 @@ def _is_junk(item: dict[str, str | None]) -> bool:
         return True
     if _COMPANY_ONLY.search(description) and not _PROJECT_HINT.search(description):
         return True
-    return not any(
+    real = [
         item.get(key)
         for key in (
             "customer",
+            "duration",
             "project_industry",
             "project_description",
             "project_position",
             "work_performed",
         )
-    )
+        if _cell_value(item.get(key))
+    ]
+    return len(real) < _MIN_PROJECT_LABELS
