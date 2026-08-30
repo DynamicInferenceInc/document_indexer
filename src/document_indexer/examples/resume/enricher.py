@@ -9,7 +9,6 @@ from typing import Any
 
 from document_indexer.adapters.enrichment.json_schema import ChatCompleter, OllamaChatCompleter
 from document_indexer.domain.models import DocumentChunk
-from document_indexer.examples.resume.parser import infer_functional_direction
 
 logger = logging.getLogger(__name__)
 
@@ -49,22 +48,27 @@ class FunctionalDirectionEnricher:
             extra = chunk.extra_fields or {}
             role = extra.get("project_position")
             work = extra.get("work_performed")
-            if not role and not work:
+            header_position = extra.get("candidate_position")
+            if not role and not work and not header_position:
                 directions.append(None)
                 continue
-            directions.append(
-                self._extract(path, role, work)
-                or extra.get("functional_direction")
-                or infer_functional_direction(role, work)
-            )
+            directions.append(self._extract(path, role, work, header_position))
         return {"functional_directions": directions}
 
-    def _extract(self, path: Path, role: object, work: object) -> str | None:
+    def _extract(
+        self,
+        path: Path,
+        role: object,
+        work: object,
+        header_position: object,
+    ) -> str | None:
         lines = []
         if role:
             lines.append(f"Роль на проекте: {role}")
         if work:
             lines.append(f"Выполненные работы: {work}")
+        if header_position:
+            lines.append(f"Должность из шапки: {header_position}")
         messages = [
             {"role": "system", "content": self._prompt},
             {"role": "user", "content": f"Имя файла: {path.name}\n\n" + "\n".join(lines)},

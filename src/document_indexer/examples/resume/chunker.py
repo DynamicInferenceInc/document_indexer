@@ -9,7 +9,6 @@ from document_indexer.examples.resume.parser import (
     document_tables,
     document_text,
     format_project_text,
-    infer_functional_direction,
     parse_header,
     parse_projects,
 )
@@ -59,10 +58,6 @@ def _project_chunk(
         "project_description": project.get("project_description"),
         "project_position": project.get("project_position"),
         "work_performed": project.get("work_performed"),
-        "functional_direction": infer_functional_direction(
-            project.get("project_position"),
-            project.get("work_performed"),
-        ),
     }
     return DocumentChunk(
         text=format_project_text(project),

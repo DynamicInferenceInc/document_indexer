@@ -88,14 +88,13 @@ def test_projects_from_one_column_then_two_column_tables() -> None:
     assert projects[3]["project_description"].startswith("Внедрение SAP S/4 HANA")
 
 
-def test_chunker_fills_functional_direction_from_role() -> None:
+def test_chunker_leaves_functional_direction_for_llm() -> None:
     document = SimpleNamespace(export_to_markdown=load_resume_sample)
     chunks = ResumeProjectChunker().chunk_document(document, path_name="cv.md")
-    assert chunks[0].extra_fields["functional_direction"] == "Казначейство"
-    text = "ФИО: Петров Пётр\nЖелаемая должность: разработчик"
-    header = parse_header(text)
-    assert header["candidate_name"] == "Петров Пётр"
-    assert header["candidate_position"] == "разработчик"
+    assert "functional_direction" not in chunks[0].extra_fields
+    assert chunks[0].extra_fields["project_position"] == (
+        "Консультант по направлению Казначейство"
+    )
 
 
 def test_projects_from_column_table() -> None:

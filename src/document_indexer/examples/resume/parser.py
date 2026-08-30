@@ -45,10 +45,6 @@ _COMPANY_ONLY = re.compile(r"\bг\.\s|.+,\s*(россия|russia)\s*$", re.I)
 _PROJECT_HINT = re.compile(r"(проект|внедрен|переход|миграц|автоматиз|интеграц)", re.I)
 _TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
 _TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
-_DIRECTION_FROM_ROLE = (
-    re.compile(r"по\s+направлению\s+([^,.;(\n]+)", re.I),
-    re.compile(r"по\s+блоку\s+([^,.;(\n]+)", re.I),
-)
 
 _FIELD_TITLES = {
     "customer": "Заказчик",
@@ -160,19 +156,6 @@ def format_project_text(project: dict[str, str | None]) -> str:
         if value:
             lines.append(f"{title}: {value}")
     return "\n".join(lines)
-
-
-def infer_functional_direction(role: object, work: object = None) -> str | None:
-    """Pull a direction from «по направлению» / «по блоку» without an LLM."""
-    for source in (role, work):
-        text = str(source or "")
-        if not text:
-            continue
-        for pattern in _DIRECTION_FROM_ROLE:
-            match = pattern.search(text)
-            if match:
-                return _clean(match.group(1))
-    return None
 
 
 def _header_tokens(text: str) -> list[str]:

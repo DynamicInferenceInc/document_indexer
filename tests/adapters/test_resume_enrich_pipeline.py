@@ -105,6 +105,33 @@ def test_resume_payload_skips_llm_for_window_chunks() -> None:
     assert chat.calls == []
 
 
+def test_resume_enricher_always_calls_llm_for_project_role() -> None:
+    chat = FakeChat()
+    enricher = FunctionalDirectionEnricher(
+        load_resume_schema(),
+        load_resume_prompt(),
+        chat=chat,
+    )
+    fields = enricher.enrich(
+        Path("cv.md"),
+        [
+            DocumentChunk(
+                text="роль",
+                chunk_type="project",
+                extra_fields={
+                    "candidate_position": "Ведущий консультант",
+                    "project_position": "Консультант по направлению Казначейство",
+                    "work_performed": "тестирование",
+                },
+            )
+        ],
+    )
+    assert fields == {"functional_directions": ["Казначейство"]}
+    assert len(chat.calls) == 1
+    assert "Роль на проекте: Консультант по направлению Казначейство" in chat.calls[0]
+    assert "Должность из шапки: Ведущий консультант" in chat.calls[0]
+
+
 def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -145,7 +172,7 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
     assert "project_experiences" not in first.payload
     assert second.payload["functional_direction"] == "архитектура 1С"
     assert second.payload["project_description"] != first.payload["project_description"]
-    assert first.payload["index_version"] == "resume-v14"
+    assert first.payload["index_version"] == "resume-v15"
 
     index_names = {
         call.kwargs["field_name"] for call in client.create_payload_index.call_args_list

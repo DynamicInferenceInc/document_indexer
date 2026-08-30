@@ -160,7 +160,7 @@ Payload точек по умолчанию не менялся: `source_path`, `
 
 `PayloadBuilder` раскладывает уже известные данные по ключам Qdrant. `DocumentEnricher` достаёт поля из текста (не VLM).
 
-Resume-профиль режет документ так: один проект — один чанк (`chunk_type=project`). Если проектов нет — overlapping windows (`chunk_type=prose`). На каждой точке лежат `candidate_name` и `candidate_position` из шапки (ФИО может быть без подписи). LLM вызывается только для `functional_direction` и только на проектных чанках (роль, иначе выполненные работы). Пример CV: `examples/resume/sample.md`.
+Resume-профиль режет документ так: один проект — один чанк (`chunk_type=project`). Если проектов нет — overlapping windows (`chunk_type=prose`). На каждой точке лежат `candidate_name` и `candidate_position` из шапки (ФИО может быть без подписи). `functional_direction` всегда через LLM (роль, иначе выполненные работы, иначе должность из шапки). Строки-заголовки таблицы и неполные копии того же проекта отбрасываются. Пример CV: `examples/resume/sample.md`.
 
 ```python
 from document_indexer import DocumentIndexer, ProfileLocal, QdrantSettings
