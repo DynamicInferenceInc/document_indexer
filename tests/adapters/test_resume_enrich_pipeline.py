@@ -172,7 +172,7 @@ def test_resume_schema_file_fake_chat_points(tmp_path: Path) -> None:
     assert "project_experiences" not in first.payload
     assert second.payload["functional_direction"] == "архитектура 1С"
     assert second.payload["project_description"] != first.payload["project_description"]
-    assert first.payload["index_version"] == "resume-v16"
+    assert first.payload["index_version"] == "resume-v17"
 
     index_names = {
         call.kwargs["field_name"] for call in client.create_payload_index.call_args_list
@@ -210,3 +210,32 @@ def test_resume_payload_window_has_name_and_position_without_project_fields() ->
     assert "project_experiences" not in payload
     assert "project_industry" not in payload
     assert payload["functional_direction"] is None
+
+
+def test_bind_replaces_json_schema_enricher_for_resume_strategy() -> None:
+    from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
+    from document_indexer.config import ChunkingSettings, IndexerSettings, ModelSettings
+    from document_indexer.examples.resume.enricher import bind_resume_enricher
+
+    settings = IndexerSettings(
+        _env_file=None,
+        chunking=ChunkingSettings(strategy="resume_project"),
+        models=ModelSettings(extraction_model="qwen3:4b"),
+    )
+    incoming = JsonSchemaEnricher(load_resume_schema(), load_resume_prompt(), chat=FakeChat())
+    bound = bind_resume_enricher(settings, incoming)
+    assert isinstance(bound, FunctionalDirectionEnricher)
+
+
+def test_bind_keeps_json_schema_enricher_for_table_aware() -> None:
+    from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
+    from document_indexer.config import ChunkingSettings, IndexerSettings, ModelSettings
+    from document_indexer.examples.resume.enricher import bind_resume_enricher
+
+    settings = IndexerSettings(
+        _env_file=None,
+        chunking=ChunkingSettings(strategy="table_aware"),
+        models=ModelSettings(extraction_model="qwen3:4b"),
+    )
+    incoming = JsonSchemaEnricher(load_resume_schema(), load_resume_prompt(), chat=FakeChat())
+    assert bind_resume_enricher(settings, incoming) is incoming

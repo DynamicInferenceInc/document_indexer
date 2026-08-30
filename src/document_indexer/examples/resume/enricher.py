@@ -41,6 +41,9 @@ class FunctionalDirectionEnricher:
             raise ValueError("FunctionalDirectionEnricher requires chat= or a non-empty model")
 
     def enrich(self, path: Path, chunks: Sequence[DocumentChunk]) -> dict[str, Any]:
+        if not any(chunk.chunk_type == "project" for chunk in chunks):
+            logger.info("Skip functional direction path=%s: no project chunks", path)
+            return {"functional_directions": [None] * len(chunks)}
         project_count = sum(1 for chunk in chunks if chunk.chunk_type == "project")
         started = time.perf_counter()
         logger.info(
@@ -98,3 +101,36 @@ class FunctionalDirectionEnricher:
         if value in (None, "", [], "null", "None"):
             return None
         return str(value).strip() or None
+
+
+def bind_resume_enricher(settings: Any, enricher: Any) -> Any:
+    """Use per-project direction extraction when chunking resumes.
+
+    A whole-document JsonSchemaEnricher writes ``functional_direction`` once;
+    the payload reads ``functional_directions`` per chunk, so the field stays empty.
+    """
+    if getattr(getattr(settings, "chunking", None), "strategy", None) != "resume_project":
+        return enricher
+    if isinstance(enricher, FunctionalDirectionEnricher):
+        return enricher
+    models = getattr(settings, "models", None)
+    model = str(getattr(models, "extraction_model", "") or "").strip()
+    from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
+
+    if not model:
+        return None if isinstance(enricher, JsonSchemaEnricher) else enricher
+    if enricher is not None and not isinstance(enricher, JsonSchemaEnricher):
+        return enricher
+    from document_indexer.examples.resume.payload import load_resume_prompt, load_resume_schema
+
+    logger.info(
+        "Using FunctionalDirectionEnricher for resume_project (was %s)",
+        type(enricher).__name__ if enricher is not None else "None",
+    )
+    return FunctionalDirectionEnricher(
+        load_resume_schema(),
+        load_resume_prompt(),
+        base_url=str(getattr(models, "ollama_base_url", "http://127.0.0.1:11434")),
+        model=model,
+        timeout_sec=float(getattr(models, "extraction_timeout_sec", 180.0)),
+    )

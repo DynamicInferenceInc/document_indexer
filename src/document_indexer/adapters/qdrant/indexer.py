@@ -303,8 +303,9 @@ class QdrantIndexer:
             logger.exception("Document enrich failed path=%s; indexing without extra fields", relative)
             document_fields = {}
         logger.info(
-            "Enrich done path=%s fields=%s elapsed=%.2fs",
+            "Enrich done path=%s enricher=%s fields=%s elapsed=%.2fs",
             relative,
+            type(self._enricher).__name__,
             len(document_fields),
             time.perf_counter() - enrich_started,
         )

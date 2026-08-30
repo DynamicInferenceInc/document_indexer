@@ -238,6 +238,10 @@ def build_indexer(
     )
     if document_chunker is None:
         document_chunker = _build_document_chunker(settings, hybrid, tokenizer)
+    if settings.chunking.strategy == "resume_project":
+        from document_indexer.examples.resume.enricher import bind_resume_enricher
+
+        enricher = bind_resume_enricher(settings, enricher)
     reader = DoclingDocumentReader(
         DocumentConverter(format_options=picture.format_options()),
         hybrid,
