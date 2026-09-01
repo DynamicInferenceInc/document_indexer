@@ -6,7 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from document_indexer.infra.embeddings import OllamaEmbedder
-from document_indexer.adapters.qdrant_indexer import QdrantIndexer, file_content_hash
+from document_indexer.adapters.qdrant_indexer import (
+    QdrantIndexer,
+    collect_resume_project_stats,
+    file_content_hash,
+)
 from document_indexer.domain.models import DocumentChunk
 
 
@@ -66,6 +70,42 @@ def test_qdrant_indexer_indexes_reader_chunks(tmp_path: Path) -> None:
     assert len(points[0].payload["file_hash"]) == 64
     assert points[0].payload["index_version"] == "table-aware-v2"
     assert points[0].payload["chunk_type"] == "prose"
+
+
+def test_collect_resume_project_stats_groups_by_source() -> None:
+    rows = collect_resume_project_stats(
+        [
+            {
+                "source_path": "Власова/Власова_CV_RU.docx",
+                "chunk_type": "prose",
+                "candidate_name": "Елена Власова",
+            },
+            {
+                "source_path": "Иванов/cv.docx",
+                "chunk_type": "project",
+                "candidate_name": "Иван Иванов",
+            },
+            {
+                "source_path": "Иванов/cv.docx",
+                "chunk_type": "project",
+                "candidate_name": "Иван Иванов",
+            },
+        ]
+    )
+    assert rows == [
+        {
+            "source_path": "Власова/Власова_CV_RU.docx",
+            "candidate_name": "Елена Власова",
+            "project_count": 0,
+            "prose_count": 1,
+        },
+        {
+            "source_path": "Иванов/cv.docx",
+            "candidate_name": "Иван Иванов",
+            "project_count": 2,
+            "prose_count": 0,
+        },
+    ]
 
 
 def test_qdrant_indexer_stores_one_table_point_and_aggregates_parts(

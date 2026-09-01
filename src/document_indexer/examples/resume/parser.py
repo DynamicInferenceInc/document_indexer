@@ -43,9 +43,9 @@ _DATE_ONLY = re.compile(
 )
 _COMPANY_ONLY = re.compile(r"\bг\.\s|.+,\s*(россия|russia)\s*$", re.I)
 _PROJECT_HINT = re.compile(r"(проект|внедрен|переход|миграц|автоматиз|интеграц)", re.I)
-_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
-_TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$")
+_TABLE_SEP_CHARS = re.compile(r"^[\s|:\-]+$")
 _LINE_BULLET = re.compile(r"^(?:[-*•–—]+\s+|\d+[.)]\s+)")
+_MARKDOWN_BOLD = re.compile(r"\*\*([^*]+)\*\*")
 
 _FIELD_TITLES = {
     "customer": "Заказчик",
@@ -105,7 +105,16 @@ def parse_header(text: str) -> dict[str, str | None]:
         if field == "project_position":
             continue
         if pending_position:
-            position = _clean(token) or position
+            if (
+                _POSITION_HEADER.match(token)
+                or _field_key(token)
+                or _SKIP_HEADER_LINE.match(token)
+            ):
+                continue
+            cleaned = _clean(token)
+            if not cleaned or _looks_like_fio(cleaned):
+                continue
+            position = cleaned
             pending_position = False
             continue
         if _is_header_position_line(token):
@@ -138,9 +147,11 @@ def parse_projects(
     for table in list(tables or []) + _markdown_tables(text):
         for item in _projects_from_table(table):
             add(item)
+    for item in _projects_from_scattered_label_rows(_all_pipe_rows(text)):
+        add(item)
     for item in _projects_from_blocks(text):
         add(item)
-    return projects
+    return _drop_subset_projects(projects)
 
 
 def format_project_text(project: dict[str, str | None]) -> str:
@@ -162,9 +173,9 @@ def _header_tokens(text: str) -> list[str]:
         seen_lines += 1
         if seen_lines > _HEADER_LINES:
             break
-        if _TABLE_SEP.match(line):
+        if _is_table_sep(line):
             continue
-        if _TABLE_ROW.match(line):
+        if _is_table_row(line):
             for cell in _row_cells(line):
                 if cell:
                     tokens.append(cell)
@@ -203,49 +214,40 @@ def _header_position_value(line: str) -> str | None:
     return _clean(match.group(1))
 
 
+def _is_table_sep(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped) and "-" in stripped and bool(_TABLE_SEP_CHARS.match(stripped))
+
+
+def _is_table_row(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or _is_table_sep(stripped):
+        return False
+    if stripped.startswith("|"):
+        return True
+    return stripped.count("|") >= 2
+
+
 def _markdown_tables(text: str) -> list[list[list[str]]]:
-    lines = text.splitlines()
     tables: list[list[list[str]]] = []
-    index = 0
-    while index < len(lines):
-        stripped = lines[index].strip()
-        if not _TABLE_ROW.match(stripped):
-            index += 1
+    current: list[list[str]] | None = None
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if _is_table_sep(stripped):
             continue
-        rows: list[list[str]] = []
-        while index < len(lines):
-            current = lines[index].strip()
-            if not current:
-                peek = index + 1
-                while peek < len(lines) and not lines[peek].strip():
-                    peek += 1
-                nxt = lines[peek].strip() if peek < len(lines) else ""
-                if (
-                    rows
-                    and nxt
-                    and (_TABLE_ROW.match(nxt) or _TABLE_SEP.match(nxt))
-                    and not _TABLE_SEP.match(nxt)
-                    and len(_row_cells(nxt)) == len(rows[0])
-                ):
-                    index += 1
-                    continue
-                if rows and nxt and _TABLE_SEP.match(nxt):
-                    index += 1
-                    continue
-                break
-            if _TABLE_SEP.match(current):
-                index += 1
+        if _is_table_row(stripped):
+            cells = _row_cells(stripped)
+            if not any(cells):
                 continue
-            if not _TABLE_ROW.match(current):
-                break
-            cells = _row_cells(current)
-            if any(cells):
-                rows.append(cells)
-            index += 1
-        if rows:
-            tables.append(_pad_rows(rows))
-        else:
-            index += 1
+            if current is None:
+                current = []
+            current.append(cells)
+            continue
+        if current is not None:
+            tables.append(_pad_rows(current))
+            current = None
+    if current is not None:
+        tables.append(_pad_rows(current))
     return tables
 
 
@@ -281,20 +283,27 @@ def _grid_from_table(table: Any) -> list[list[str]]:
 def _projects_from_table(rows: list[list[str]]) -> list[dict[str, str | None]]:
     if not rows or not rows[0]:
         return []
-    first_col_labels = [_field_key(row[0]) for row in rows]
+    label_col = _label_column(rows)
+    col_hits = sum(
+        1 for row in rows if label_col < len(row) and _field_key(row[label_col])
+    )
     first_row_labels = [_field_key(cell) for cell in rows[0]]
-    col_hits = sum(1 for key in first_col_labels if key)
     row_hits = sum(1 for key in first_row_labels if key)
     live_columns = [
         column
         for column in range(len(rows[0]))
-        if any(_clean(row[column]) for row in rows)
+        if any(column < len(row) and _clean(row[column]) for row in rows)
     ]
     if len(live_columns) <= 1 and col_hits >= _MIN_PROJECT_LABELS:
         column = live_columns[0] if live_columns else 0
-        return _projects_from_alternating_cells([row[column] for row in rows])
-    if col_hits >= _MIN_PROJECT_LABELS and col_hits >= row_hits:
-        return _projects_from_label_column(rows)
+        return _projects_from_alternating_cells(
+            [row[column] if column < len(row) else "" for row in rows]
+        )
+    if _has_distinct_side_by_side(rows) and col_hits >= _MIN_PROJECT_LABELS:
+        return _projects_from_label_column(rows, label_col)
+    scattered = _projects_from_scattered_label_rows(rows)
+    if scattered:
+        return scattered
     if row_hits >= _MIN_PROJECT_LABELS:
         fields = first_row_labels
         projects = []
@@ -308,17 +317,56 @@ def _projects_from_table(rows: list[list[str]]) -> list[dict[str, str | None]]:
                 item[field] = _cell_value(row[column])
             projects.append(item)
         return projects
-    return []
+    cells = [cell for row in rows for cell in row if _clean(cell)]
+    return _projects_from_alternating_cells(cells)
 
 
-def _projects_from_label_column(rows: list[list[str]]) -> list[dict[str, str | None]]:
+def _label_column(rows: list[list[str]]) -> int:
+    width = max((len(row) for row in rows), default=0)
+    if width == 0:
+        return 0
+    scores = [0] * width
+    for row in rows:
+        for index, cell in enumerate(row):
+            if _field_key(cell):
+                scores[index] += 1
+    if not any(scores):
+        return 0
+    return max(range(width), key=lambda index: scores[index])
+
+
+def _has_distinct_side_by_side(rows: list[list[str]]) -> bool:
+    """True when one labeled row holds two different project values (wide table)."""
+    for row in rows:
+        field = None
+        values: list[str] = []
+        for cell in row:
+            key = _field_key(cell)
+            if key:
+                field = key
+                continue
+            value = _cell_value(cell)
+            if value:
+                values.append(value)
+        if field and len(_merge_related_values(values)) >= 2:
+            return True
+    return False
+
+
+def _projects_from_label_column(
+    rows: list[list[str]],
+    label_col: int = 0,
+) -> list[dict[str, str | None]]:
     """Each extra column is a project. Repeated labels start the next stacked project."""
-    width = len(rows[0])
+    width = max((len(row) for row in rows), default=0)
     projects: list[dict[str, str | None]] = []
-    for column in range(1, width):
+    for column in range(width):
+        if column == label_col:
+            continue
         current: dict[str, str | None] | None = None
         for row in rows:
-            field = _field_key(row[0])
+            label = row[label_col] if label_col < len(row) else ""
+            field = _field_key(label)
             if not field:
                 continue
             value = _cell_value(row[column] if column < len(row) else "")
@@ -330,6 +378,63 @@ def _projects_from_label_column(rows: list[list[str]]) -> list[dict[str, str | N
                 current[field] = value
         if current:
             projects.append(current)
+    return projects
+
+
+def _all_pipe_rows(text: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for raw in text.splitlines():
+        if not _is_table_row(raw) or _is_table_sep(raw):
+            continue
+        cells = _row_cells(raw)
+        if any(cells):
+            rows.append(cells)
+    return rows
+
+
+def _projects_from_scattered_label_rows(
+    rows: list[list[str]],
+) -> list[dict[str, str | None]]:
+    """Find a field label anywhere in the row; duplicated value columns collapse."""
+    current: dict[str, str | None] | None = None
+    projects: list[dict[str, str | None]] = []
+    last_field: str | None = None
+    for row in rows:
+        field: str | None = None
+        values: list[str] = []
+        mixed_labels = False
+        for cell in row:
+            key = _field_key(cell)
+            if key:
+                if field is not None and key != field:
+                    mixed_labels = True
+                    break
+                field = key
+                continue
+            value = _cell_value(cell)
+            if value:
+                values.append(value)
+        if mixed_labels or not field:
+            continue
+        unique = _merge_related_values(values)
+        if len(unique) >= 2:
+            continue
+        value = unique[0] if unique else None
+        if not value:
+            continue
+        if current is not None and current.get(field):
+            if last_field == field and _same_value(str(current[field]), value):
+                if len(value) > len(current[field] or ""):
+                    current[field] = value
+                continue
+            projects.append(current)
+            current = {key: None for key in _FIELD_TITLES}
+        if current is None:
+            current = {key: None for key in _FIELD_TITLES}
+        current[field] = value
+        last_field = field
+    if current:
+        projects.append(current)
     return projects
 
 
@@ -366,7 +471,7 @@ def _projects_from_blocks(text: str) -> list[dict[str, str | None]]:
     pending_field: str | None = None
     for raw in text.splitlines():
         line = raw.strip().strip("*")
-        if _TABLE_ROW.match(line) or _TABLE_SEP.match(line):
+        if _is_table_row(line) or _is_table_sep(line):
             continue
         if not line:
             if current and pending_field is None:
@@ -423,10 +528,35 @@ def _clean(value: object) -> str | None:
     parts = []
     for line in raw.split("\n"):
         stripped = _LINE_BULLET.sub("", line.strip())
+        stripped = _MARKDOWN_BOLD.sub(r"\1", stripped)
         if stripped:
             parts.append(stripped)
-    text = " ".join(parts).strip(" \t.,;")
+    text = " ".join(" ".join(parts).split()).strip(" \t.,;*")
     return text or None
+
+
+def _same_value(left: str, right: str) -> bool:
+    first = _norm_field(left)
+    second = _norm_field(right)
+    if not first or not second:
+        return False
+    return first == second or first in second or second in first
+
+
+def _merge_related_values(values: list[str]) -> list[str]:
+    merged: list[str] = []
+    for value in values:
+        found = False
+        for index, existing in enumerate(merged):
+            if not _same_value(value, existing):
+                continue
+            if len(value) > len(existing):
+                merged[index] = value
+            found = True
+            break
+        if not found:
+            merged.append(value)
+    return merged
 
 
 def _cell_value(value: object) -> str | None:
@@ -501,3 +631,31 @@ def _is_junk(item: dict[str, str | None]) -> bool:
         if _cell_value(item.get(key))
     ]
     return len(real) < _MIN_PROJECT_LABELS
+
+
+def _drop_subset_projects(
+    projects: list[dict[str, str | None]],
+) -> list[dict[str, str | None]]:
+    """Drop fragments that are a proper subset of a fuller parse of the same project."""
+    kept: list[dict[str, str | None]] = []
+    for index, item in enumerate(projects):
+        item_n = _filled_count(item)
+        drop = False
+        for other_index, other in enumerate(projects):
+            if other_index == index:
+                continue
+            other_n = _filled_count(other)
+            if other_n > item_n and _covers(other, item):
+                drop = True
+                break
+            if (
+                other_n == item_n
+                and other_index < index
+                and _covers(other, item)
+                and _covers(item, other)
+            ):
+                drop = True
+                break
+        if not drop:
+            kept.append(item)
+    return kept

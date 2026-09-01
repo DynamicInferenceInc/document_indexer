@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from document_indexer.domain.models import DocumentChunk
@@ -13,6 +14,8 @@ from document_indexer.examples.resume.parser import (
     parse_projects,
 )
 from document_indexer.infra.chunking import chunk_text
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_WINDOW_CHARS = 1200
 _DEFAULT_WINDOW_OVERLAP = 150
@@ -31,12 +34,23 @@ class ResumeProjectChunker:
         self._window_overlap = window_overlap
 
     def chunk_document(self, document: Any, *, path_name: str) -> list[DocumentChunk]:
-        del path_name
         text = document_text(document)
         header = parse_header(text)
         projects = parse_projects(text, tables=document_tables(document))
+        logger.info(
+            "Resume parse path=%s name=%s position=%s projects=%s",
+            path_name,
+            header.get("candidate_name"),
+            header.get("candidate_position"),
+            len(projects),
+        )
         if projects:
             return [_project_chunk(header, project) for project in projects]
+        logger.warning(
+            "Resume has no parsed projects path=%s name=%s — falling back to prose windows",
+            path_name,
+            header.get("candidate_name") or "?",
+        )
         return [
             _window_chunk(header, piece)
             for piece in chunk_text(

@@ -124,6 +124,25 @@ class QdrantStore:
         )
         logger.debug("Qdrant deleted source=%s", relative)
 
+    def scroll_payloads(self, fields: Sequence[str]) -> list[dict[str, object]]:
+        if not self.collection_exists():
+            return []
+        payloads: list[dict[str, object]] = []
+        offset: object | None = None
+        while True:
+            records, offset = self.client.scroll(
+                collection_name=self.collection,
+                with_payload=list(fields),
+                with_vectors=False,
+                limit=_SCROLL_LIMIT,
+                offset=offset,
+            )
+            for record in records:
+                payloads.append(record.payload or {})
+            if offset is None:
+                break
+        return payloads
+
     def delete_prefix(self, prefix: str) -> None:
         if not self.collection_exists():
             return
