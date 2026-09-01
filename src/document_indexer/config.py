@@ -142,6 +142,13 @@ class IndexerSettings(BaseSettings):
         ),
     )
     log_level: str = "INFO"
+    resume_parse_only: bool = Field(
+        default=False,
+        description=(
+            "Docling + resume parser only. No extraction LLM, embeddings, or Qdrant. "
+            "Env: RESUME_PARSE_ONLY=1."
+        ),
+    )
 
     @field_validator("index_extensions")
     @classmethod

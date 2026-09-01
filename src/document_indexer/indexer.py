@@ -57,13 +57,22 @@ class DocumentIndexer:
         self._settings = settings if settings is not None else IndexerSettings()
         if configure_logs:
             configure_logging(self._settings.log_level)
+        self._parse_only = bool(self._settings.resume_parse_only)
+        if self._parse_only:
+            logger.warning(
+                "RESUME_PARSE_ONLY enabled: parser audit only "
+                "(no LLM, no embed, no Qdrant)"
+            )
         allowed = _log_extensions(self._settings)
-        self._core = indexer if indexer is not None else build_indexer(
-            self._settings,
-            payload_builder=payload_builder,
-            enricher=enricher,
-            document_chunker=document_chunker,
-        )
+        if self._parse_only:
+            self._core = indexer
+        else:
+            self._core = indexer if indexer is not None else build_indexer(
+                self._settings,
+                payload_builder=payload_builder,
+                enricher=enricher,
+                document_chunker=document_chunker,
+            )
         self._source = source if source is not None else build_source(
             self._settings,
             allowed_extensions=allowed,
@@ -78,6 +87,8 @@ class DocumentIndexer:
 
     def reindex_once(self) -> None:
         """Sync the source if needed and run a full Qdrant reconcile."""
+        if self._run_parse_only_if_enabled():
+            return
         root = self._source.prepare()
         logger.info(
             "Starting one-shot reindex on %s (qdrant=%s collection=%s)",
@@ -90,6 +101,8 @@ class DocumentIndexer:
 
     def run(self) -> None:
         """Run an initial reconcile, then watch or poll until :meth:`stop`."""
+        if self._run_parse_only_if_enabled():
+            return
         self._stop.clear()
         self._install_signal_handlers()
         root = self._prepare_with_retry()
@@ -149,6 +162,14 @@ class DocumentIndexer:
                 "Indexer.index failed for %s",
                 self._source.local_root(),
             )
+
+    def _run_parse_only_if_enabled(self) -> bool:
+        if not self._parse_only:
+            return False
+        from document_indexer.examples.resume.audit import run_resume_parse_audit
+
+        run_resume_parse_audit(self._settings)
+        return True
 
     def _prepare_with_retry(self) -> Path:
         delay = 1.0
@@ -238,7 +259,7 @@ def build_indexer(
     )
     if document_chunker is None:
         document_chunker = _build_document_chunker(settings, hybrid, tokenizer)
-    if settings.chunking.strategy == "resume_project":
+    if settings.chunking.strategy == "resume_project" and not settings.resume_parse_only:
         from document_indexer.examples.resume.enricher import bind_resume_enricher
 
         enricher = bind_resume_enricher(settings, enricher)

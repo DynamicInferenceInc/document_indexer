@@ -142,6 +142,9 @@ def bind_resume_enricher(settings: Any, enricher: Any) -> Any:
     A whole-document JsonSchemaEnricher writes ``functional_direction`` once;
     the payload reads ``functional_directions`` per chunk, so the field stays empty.
     """
+    if getattr(settings, "resume_parse_only", False):
+        logger.info("Skip FunctionalDirectionEnricher: RESUME_PARSE_ONLY")
+        return None
     if getattr(getattr(settings, "chunking", None), "strategy", None) != "resume_project":
         return enricher
     if isinstance(enricher, FunctionalDirectionEnricher):

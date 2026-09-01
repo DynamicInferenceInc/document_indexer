@@ -237,6 +237,21 @@ def test_bind_replaces_json_schema_enricher_for_resume_strategy() -> None:
     assert isinstance(bound, FunctionalDirectionEnricher)
 
 
+def test_bind_skips_enricher_when_parse_only() -> None:
+    from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
+    from document_indexer.config import ChunkingSettings, IndexerSettings, ModelSettings
+    from document_indexer.examples.resume.enricher import bind_resume_enricher
+
+    settings = IndexerSettings(
+        _env_file=None,
+        chunking=ChunkingSettings(strategy="resume_project"),
+        models=ModelSettings(extraction_model="qwen3:4b"),
+        resume_parse_only=True,
+    )
+    incoming = JsonSchemaEnricher(load_resume_schema(), load_resume_prompt(), chat=FakeChat())
+    assert bind_resume_enricher(settings, incoming) is None
+
+
 def test_bind_keeps_json_schema_enricher_for_table_aware() -> None:
     from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
     from document_indexer.config import ChunkingSettings, IndexerSettings, ModelSettings

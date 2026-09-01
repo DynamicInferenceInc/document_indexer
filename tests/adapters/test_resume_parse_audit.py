@@ -104,3 +104,29 @@ def test_run_resume_parse_audit_skips_llm_and_writes_csv(
     csv_text = (watch / ".resume_project_stats.csv").read_text(encoding="utf-8")
     assert "good.md" in csv_text
     assert "empty.md" in csv_text
+
+
+def test_document_indexer_parse_only_skips_build_indexer(tmp_path: Path, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    from document_indexer import DocumentIndexer, IndexerSettings, LocalSourceSettings
+
+    monkeypatch.delenv("RESUME_PARSE_ONLY", raising=False)
+    watch = tmp_path / "cv"
+    watch.mkdir()
+    built: list[str] = []
+    monkeypatch.setattr(
+        "document_indexer.indexer.build_indexer",
+        lambda *args, **kwargs: built.append("built") or MagicMock(),
+    )
+    monkeypatch.setattr(
+        "document_indexer.examples.resume.audit.run_resume_parse_audit",
+        lambda settings: built.append("audit") or [],
+    )
+    settings = IndexerSettings(
+        _env_file=None,
+        source=LocalSourceSettings(watch_path=str(watch)),
+        resume_parse_only=True,
+    )
+    DocumentIndexer(settings, configure_logs=False).run()
+    assert built == ["audit"]
