@@ -23,6 +23,7 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _CSV_FIELDS = (
     "source_path",
     "candidate_name",
+    "candidate_position",
     "project_count",
     "prose_count",
     "error",
@@ -86,6 +87,7 @@ def row_from_chunks(relative: str, chunks: Sequence[Any]) -> dict[str, Any]:
     return {
         "source_path": relative,
         "candidate_name": extra.get("candidate_name"),
+        "candidate_position": extra.get("candidate_position"),
         "project_count": sum(1 for chunk in chunks if chunk.chunk_type == "project"),
         "prose_count": sum(1 for chunk in chunks if chunk.chunk_type == "prose"),
         "error": None,
@@ -104,8 +106,9 @@ def format_audit_report(rows: Sequence[Mapping[str, Any]]) -> str:
         lines.append(f"Резюме без выделенных проектов ({len(missing)} из {len(ok)}):")
         for row in missing:
             lines.append(
-                f"  {row.get('candidate_name') or '?'}  {row.get('source_path')}  "
-                f"prose={row.get('prose_count')}"
+                f"  {row.get('candidate_name') or '?'}  "
+                f"{row.get('candidate_position') or 'роль не распознана'}  "
+                f"{row.get('source_path')}  prose={row.get('prose_count')}"
             )
     if errors:
         lines.append(f"Ошибки конвертации ({len(errors)}):")
@@ -118,7 +121,9 @@ def format_audit_report(rows: Sequence[Mapping[str, Any]]) -> str:
         else:
             count = str(row.get("project_count") or 0)
         lines.append(
-            f"  {count:>4}  {row.get('candidate_name') or '?'}  {row.get('source_path')}"
+            f"  {count:>4}  {row.get('candidate_name') or '?'}  "
+            f"{row.get('candidate_position') or 'роль не распознана'}  "
+            f"{row.get('source_path')}"
         )
     return "\n".join(lines)
 
@@ -138,15 +143,17 @@ def _audit_one(
         return {
             "source_path": relative,
             "candidate_name": None,
+            "candidate_position": None,
             "project_count": 0,
             "prose_count": 0,
             "error": f"{type(exc).__name__}: {exc}",
         }
     row = row_from_chunks(relative, chunks)
     logger.info(
-        "Resume parse-only source=%s name=%s projects=%s prose=%s",
+        "Resume parse-only source=%s name=%s position=%s projects=%s prose=%s",
         relative,
         row["candidate_name"],
+        row["candidate_position"],
         row["project_count"],
         row["prose_count"],
     )

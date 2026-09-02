@@ -28,18 +28,25 @@ def test_row_from_chunks_counts_projects() -> None:
         DocumentChunk(
             text="p1",
             chunk_type="project",
-            extra_fields={"candidate_name": "Елена Власова"},
+            extra_fields={
+                "candidate_name": "Елена Власова",
+                "candidate_position": "Руководитель проектов",
+            },
         ),
         DocumentChunk(
             text="p2",
             chunk_type="project",
-            extra_fields={"candidate_name": "Елена Власова"},
+            extra_fields={
+                "candidate_name": "Елена Власова",
+                "candidate_position": "Руководитель проектов",
+            },
         ),
     ]
     row = row_from_chunks("Власова/CV.docx", chunks)
     assert row["project_count"] == 2
     assert row["prose_count"] == 0
     assert row["candidate_name"] == "Елена Власова"
+    assert row["candidate_position"] == "Руководитель проектов"
     assert row["error"] is None
 
 
@@ -49,6 +56,7 @@ def test_format_audit_report_lists_people_without_projects() -> None:
             {
                 "source_path": "a.docx",
                 "candidate_name": "А",
+                "candidate_position": "архитектор",
                 "project_count": 3,
                 "prose_count": 0,
                 "error": None,
@@ -56,6 +64,7 @@ def test_format_audit_report_lists_people_without_projects() -> None:
             {
                 "source_path": "b.docx",
                 "candidate_name": "Б",
+                "candidate_position": "стажер",
                 "project_count": 0,
                 "prose_count": 12,
                 "error": None,
@@ -63,8 +72,8 @@ def test_format_audit_report_lists_people_without_projects() -> None:
         ]
     )
     assert "с проектами=1 без проектов=1" in text
-    assert "Б  b.docx" in text
-    assert "   3  А  a.docx" in text
+    assert "Б  стажер  b.docx" in text
+    assert "   3  А  архитектор  a.docx" in text
 
 
 def test_run_resume_parse_audit_skips_llm_and_writes_csv(
@@ -100,6 +109,7 @@ def test_run_resume_parse_audit_skips_llm_and_writes_csv(
     by_path = {row["source_path"]: row for row in rows}
     assert by_path["good.md"]["project_count"] == 1
     assert by_path["empty.md"]["project_count"] == 0
+    assert by_path["empty.md"]["candidate_position"] == "стажер"
     assert (watch / ".resume_project_stats.csv").is_file()
     csv_text = (watch / ".resume_project_stats.csv").read_text(encoding="utf-8")
     assert "good.md" in csv_text
