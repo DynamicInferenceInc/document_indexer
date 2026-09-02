@@ -150,6 +150,13 @@ class IndexerSettings(BaseSettings):
         ),
     )
 
+    @field_validator("resume_parse_only", mode="before")
+    @classmethod
+    def _empty_resume_parse_only_is_false(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return False
+        return value
+
     @field_validator("index_extensions")
     @classmethod
     def _index_extensions_must_be_docling_readable(cls, value: str) -> str:

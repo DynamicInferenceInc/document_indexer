@@ -23,6 +23,14 @@ def test_parse_only_enabled_reads_truthy_env() -> None:
     assert parse_only_enabled({}) is False
 
 
+def test_resume_parse_only_empty_env_is_false(monkeypatch) -> None:
+    from document_indexer.config import IndexerSettings
+
+    monkeypatch.setenv("RESUME_PARSE_ONLY", "")
+    settings = IndexerSettings(_env_file=None)
+    assert settings.resume_parse_only is False
+
+
 def test_row_from_chunks_counts_projects() -> None:
     chunks = [
         DocumentChunk(
