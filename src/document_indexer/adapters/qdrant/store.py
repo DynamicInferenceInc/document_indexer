@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Literal
 
 from qdrant_client import QdrantClient
@@ -12,6 +12,8 @@ from qdrant_client.http import models as qmodels
 logger = logging.getLogger(__name__)
 
 _SCROLL_LIMIT = 100
+# Qdrant rejects HTTP JSON larger than 32MiB. Leave headroom for the envelope.
+_MAX_UPSERT_JSON_BYTES = 24 * 1024 * 1024
 _DISTANCE = {
     "cosine": qmodels.Distance.COSINE,
     "dot": qmodels.Distance.DOT,
@@ -29,10 +31,12 @@ class QdrantStore:
         collection: str,
         distance: Literal["cosine", "dot", "euclid"] = "cosine",
         client: QdrantClient | None = None,
+        max_upsert_json_bytes: int = _MAX_UPSERT_JSON_BYTES,
     ) -> None:
         self.collection = collection
         self.distance = distance
         self.client = client or QdrantClient(url=url, check_compatibility=False)
+        self._max_upsert_json_bytes = max_upsert_json_bytes
 
     def collection_exists(self) -> bool:
         return self.client.collection_exists(self.collection)
@@ -179,4 +183,53 @@ class QdrantStore:
             )
 
     def upsert(self, points: Sequence[qmodels.PointStruct]) -> None:
-        self.client.upsert(collection_name=self.collection, points=list(points))
+        items = list(points)
+        if not items:
+            return
+        batches = list(_iter_upsert_batches(items, self._max_upsert_json_bytes))
+        if len(batches) > 1:
+            logger.info(
+                "Qdrant upsert split collection=%s points=%s batches=%s limit_bytes=%s",
+                self.collection,
+                len(items),
+                len(batches),
+                self._max_upsert_json_bytes,
+            )
+        for batch in batches:
+            self.client.upsert(collection_name=self.collection, points=batch)
+
+
+def _iter_upsert_batches(
+    points: Sequence[qmodels.PointStruct],
+    max_bytes: int,
+) -> Iterator[list[qmodels.PointStruct]]:
+    batch: list[qmodels.PointStruct] = []
+    used = 0
+    for point in points:
+        size = _encoded_point_size(point)
+        if batch and used + size > max_bytes:
+            yield batch
+            batch = []
+            used = 0
+        if size > max_bytes and not batch:
+            logger.warning(
+                "Qdrant point JSON is %s bytes, limit is %s; sending it alone",
+                size,
+                max_bytes,
+            )
+            yield [point]
+            continue
+        batch.append(point)
+        used += size
+    if batch:
+        yield batch
+
+
+def _encoded_point_size(point: qmodels.PointStruct) -> int:
+    dump = getattr(point, "model_dump_json", None)
+    if callable(dump):
+        encoded = dump()
+        if isinstance(encoded, str):
+            return len(encoded.encode("utf-8")) + 1
+        return len(encoded) + 1
+    return len(str(point).encode("utf-8")) + 1
