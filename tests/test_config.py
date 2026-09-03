@@ -70,6 +70,8 @@ def test_nested_env(monkeypatch) -> None:
     monkeypatch.setenv("QDRANT__PAYLOAD_INDEXES", "source_path,grade")
     monkeypatch.setenv("QDRANT__INDEX_VERSION", "resume-v1")
     monkeypatch.setenv("CHUNKING__STRATEGY", "resume_project")
+    monkeypatch.setenv("CHUNKING__WINDOW_CHARS", "800")
+    monkeypatch.setenv("CHUNKING__WINDOW_OVERLAP", "80")
     settings = IndexerSettings(_env_file=None)
     assert settings.source.watch_path == "/mnt/docs"
     assert settings.qdrant.url == "http://127.0.0.1:6334"
@@ -80,6 +82,14 @@ def test_nested_env(monkeypatch) -> None:
     assert settings.qdrant.payload_indexes == ["source_path", "grade"]
     assert settings.qdrant.index_version == "resume-v1"
     assert settings.chunking.strategy == "resume_project"
+    assert settings.chunking.window_chars == 800
+    assert settings.chunking.window_overlap == 80
+
+
+def test_hybrid_strategy_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("CHUNKING__STRATEGY", "hybrid")
+    settings = IndexerSettings(_env_file=None)
+    assert settings.chunking.strategy == "hybrid"
 
 
 def test_smb_source_requires_connection_fields() -> None:

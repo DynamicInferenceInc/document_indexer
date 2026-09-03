@@ -13,7 +13,10 @@ from docling.chunking import HybridChunker
 from docling.document_converter import DocumentConverter
 
 from document_indexer.adapters.document_readers import DoclingDocumentReader, PictureDescriptionConfig
-from document_indexer.adapters.docling_chunking import TableAwareDocumentChunker
+from document_indexer.adapters.docling_chunking import (
+    HybridDocumentChunker,
+    TableAwareDocumentChunker,
+)
 from document_indexer.adapters.docling_convert import (
     MarkdownChunkSerializerProvider,
     tokenizer_with_max_tokens,
@@ -249,16 +252,16 @@ def build_indexer(
         concurrency=models.vlm_concurrency,
         area_threshold=models.picture_area_threshold,
     )
-    tokenizer = tokenizer_with_max_tokens(models.chunk_size)
-    hybrid = HybridChunker(
-        merge_peers=chunking.merge_peers,
-        # Tables are rendered from TableItem; repeating headers makes fragments.
-        repeat_table_header=chunking.repeat_table_header,
-        tokenizer=tokenizer,
-        serializer_provider=MarkdownChunkSerializerProvider(),
-    )
+    tokenizer = None
+    hybrid = None
     if document_chunker is None:
-        document_chunker = _build_document_chunker(settings, hybrid, tokenizer)
+        document_chunker, hybrid, tokenizer = _build_document_chunker(settings)
+    logger.info(
+        "Chunking strategy=%s window_chars=%s window_overlap=%s",
+        chunking.strategy,
+        chunking.window_chars,
+        chunking.window_overlap,
+    )
     if settings.chunking.strategy == "resume_project" and not settings.resume_parse_only:
         from document_indexer.examples.resume.enricher import bind_resume_enricher
 
@@ -273,6 +276,8 @@ def build_indexer(
     )
     builder_version = getattr(payload_builder, "index_version", "") if payload_builder is not None else ""
     index_version = settings.qdrant.index_version or builder_version or DEFAULT_INDEX_VERSION
+    if not settings.qdrant.index_version and chunking.strategy == "hybrid":
+        index_version = "hybrid-v1"
     return QdrantIndexer(
         qdrant_url=settings.qdrant.url,
         collection=settings.qdrant.collection,
@@ -290,21 +295,38 @@ def build_indexer(
 
 def _build_document_chunker(
     settings: IndexerSettings,
-    hybrid: Any,
-    tokenizer: Any,
-) -> DocumentChunker:
+) -> tuple[DocumentChunker, Any, Any]:
     chunking = settings.chunking
     if chunking.strategy == "resume_project":
         from document_indexer.examples.resume.chunker import ResumeProjectChunker
 
-        return ResumeProjectChunker(
-            window_chars=chunking.window_chars,
-            window_overlap=chunking.window_overlap,
+        return (
+            ResumeProjectChunker(
+                window_chars=chunking.window_chars,
+                window_overlap=chunking.window_overlap,
+            ),
+            None,
+            None,
         )
-    return TableAwareDocumentChunker(
-        chunker=hybrid,
-        max_tokens=settings.models.chunk_size,
+    if chunking.strategy == "hybrid":
+        hybrid = HybridChunker()
+        return HybridDocumentChunker(chunker=hybrid), hybrid, None
+    tokenizer = tokenizer_with_max_tokens(settings.models.chunk_size)
+    hybrid = HybridChunker(
+        merge_peers=chunking.merge_peers,
+        # Tables are rendered from TableItem; repeating headers makes fragments.
+        repeat_table_header=chunking.repeat_table_header,
         tokenizer=tokenizer,
+        serializer_provider=MarkdownChunkSerializerProvider(),
+    )
+    return (
+        TableAwareDocumentChunker(
+            chunker=hybrid,
+            max_tokens=settings.models.chunk_size,
+            tokenizer=tokenizer,
+        ),
+        hybrid,
+        tokenizer,
     )
 
 

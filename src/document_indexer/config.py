@@ -65,7 +65,7 @@ class ChunkingSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    strategy: Literal["table_aware", "resume_project"] = "table_aware"
+    strategy: Literal["table_aware", "resume_project", "hybrid"] = "table_aware"
     merge_peers: bool = True
     repeat_table_header: bool = False
     window_chars: int = 1200
