@@ -109,12 +109,12 @@ hr = DocumentIndexer(ProfileSmb(
 | `QDRANT__EXTRA_PAYLOAD` | JSON-константы на каждую точку | `{}` |
 | `QDRANT__PAYLOAD_INDEXES` | keyword-индексы (через запятую); пусто = индексы builder’а | builder |
 | `QDRANT__DISTANCE` | cosine / dot / euclid | `cosine` |
-| `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = версия builder’а или `table-aware-v2` | пусто |
+| `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = builder, `hybrid-v1` или `table-aware-v2` | пусто |
 | `MODELS__OLLAMA_BASE_URL` | embeddings, VLM, extraction LLM | `http://127.0.0.1:11434` |
 | `MODELS__EMBEDDING_MODEL` | модель эмбеддингов | `nomic-embed-text` |
 | `MODELS__EXTRACTION_MODEL` | text LLM для полей документа (`/api/chat`) | пусто = без enricher |
-| `MODELS__CHUNK_SIZE` | max tokens HybridChunker | `1024` |
-| `CHUNKING__STRATEGY` | `table_aware` или `resume_project` | `table_aware` |
+| `MODELS__CHUNK_SIZE` | max tokens HybridChunker только для `table_aware` | `1024` |
+| `CHUNKING__STRATEGY` | `table_aware`, `resume_project` или `hybrid` | `table_aware` |
 | `CHUNKING__WINDOW_CHARS` / `CHUNKING__WINDOW_OVERLAP` | sliding window, если в резюме нет проектов | `1200` / `150` |
 | `MODELS__PICTURE_DESCRIPTION_ENABLED` | VLM-описания картинок | `true` |
 | `MODELS__VLM_MODEL` | модель описаний | `qwen3-vl:8b` |
