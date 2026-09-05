@@ -54,11 +54,11 @@ class DocumentIndexer:
         self._settings = settings if settings is not None else IndexerSettings()
         if configure_logs:
             configure_logging(self._settings.log_level)
-        self._parse_only = _resume_parse_only(self._settings)
+        self._parse_only = _resume_audit_mode(self._settings) is not None
         if self._parse_only:
             logger.warning(
-                "RESUME_PARSE_ONLY enabled: parser audit only "
-                "(no LLM, no embed, no Qdrant)"
+                "%s enabled: resume audit only (no embed, no Qdrant)",
+                "RESUME_PARSE_ONLY" if self._settings.resume_parse_only else "RESUME_LLM_AUDIT",
             )
         allowed = _log_extensions(self._settings)
         if self._parse_only:
@@ -160,7 +160,10 @@ class DocumentIndexer:
             return False
         from document_indexer.resume.audit import run_resume_parse_audit
 
-        run_resume_parse_audit(self._settings)
+        run_resume_parse_audit(
+            self._settings,
+            with_llm=bool(self._settings.resume_llm_audit and not self._settings.resume_parse_only),
+        )
         return True
 
     def _prepare_with_retry(self) -> Path:
@@ -275,33 +278,14 @@ def _build_profile(
 ) -> tuple[DocumentChunker, Any, Any, PayloadBuilder, DocumentEnricher | None]:
     chunking = settings.chunking
     if chunking.strategy == "resume_project":
-        from document_indexer.resume.chunker import ResumeProjectChunker
-        from document_indexer.resume.enricher import FunctionalDirectionEnricher
-        from document_indexer.resume.payload import (
-            ResumePayloadBuilder,
-            load_resume_prompt,
-            load_resume_schema,
-        )
+        from document_indexer.resume.payload import ResumePayloadBuilder
 
-        enricher: DocumentEnricher | None = None
-        model = settings.models.extraction_model.strip()
-        if model and not settings.resume_parse_only:
-            enricher = FunctionalDirectionEnricher(
-                load_resume_schema(),
-                load_resume_prompt(),
-                base_url=settings.models.ollama_base_url,
-                model=model,
-                timeout_sec=settings.models.extraction_timeout_sec,
-            )
         return (
-            ResumeProjectChunker(
-                window_chars=chunking.window_chars,
-                window_overlap=chunking.window_overlap,
-            ),
+            build_resume_chunker(settings),
             None,
             None,
             ResumePayloadBuilder(),
-            enricher,
+            None,
         )
 
     tokenizer = tokenizer_with_max_tokens(settings.models.chunk_size)
@@ -322,6 +306,53 @@ def _build_profile(
         tokenizer,
         DefaultPayloadBuilder(),
         None,
+    )
+
+
+def build_resume_chunker(settings: IndexerSettings, *, with_llm: bool = True):
+    """Resume chunker with the Ollama chat client when an extraction model is set."""
+    from document_indexer.resume.chunker import ResumeProjectChunker
+
+    models = settings.models
+    chat = None
+    model = models.extraction_model.strip()
+    if with_llm and model and not settings.resume_parse_only:
+        from document_indexer.adapters.enrichment.ollama import OllamaChatCompleter
+
+        chat = OllamaChatCompleter(
+            base_url=models.ollama_base_url,
+            model=model,
+            timeout_sec=models.extraction_timeout_sec,
+            num_ctx=models.extraction_num_ctx,
+            num_predict=models.extraction_num_predict,
+            think=models.extraction_think,
+        )
+        logger.info(
+            "Resume LLM enabled model=%s ollama=%s num_ctx=%s num_predict=%s think=%s "
+            "timeout=%ss projects=%s refine=%s experience=%s residual_min_chars=%s",
+            model,
+            models.ollama_base_url,
+            models.extraction_num_ctx,
+            models.extraction_num_predict,
+            models.extraction_think,
+            models.extraction_timeout_sec,
+            settings.resume.llm_projects,
+            settings.resume.llm_refine,
+            settings.resume.llm_experience,
+            settings.resume.residual_min_chars,
+        )
+    else:
+        logger.warning(
+            "Resume LLM disabled (MODELS__EXTRACTION_MODEL empty or parse-only): "
+            "resumes without parsed projects fall back to prose windows"
+        )
+    return ResumeProjectChunker(
+        window_chars=settings.chunking.window_chars,
+        window_overlap=settings.chunking.window_overlap,
+        chat=chat,
+        settings=settings.resume,
+        num_ctx=models.extraction_num_ctx,
+        num_predict=models.extraction_num_predict,
     )
 
 
@@ -349,16 +380,22 @@ def run(settings: IndexerSettings | None = None) -> None:
     DocumentIndexer(settings).run()
 
 
-def _resume_parse_only(settings: IndexerSettings) -> bool:
-    if not settings.resume_parse_only:
-        return False
+def _resume_audit_mode(settings: IndexerSettings) -> str | None:
+    """``parser`` / ``llm`` when an audit flag is set for the resume strategy, else None."""
+    if settings.resume_parse_only:
+        mode = "parser"
+    elif settings.resume_llm_audit:
+        mode = "llm"
+    else:
+        return None
     if settings.chunking.strategy != "resume_project":
         logger.warning(
-            "RESUME_PARSE_ONLY ignored: CHUNKING__STRATEGY=%s (need resume_project)",
+            "%s ignored: CHUNKING__STRATEGY=%s (need resume_project)",
+            "RESUME_PARSE_ONLY" if mode == "parser" else "RESUME_LLM_AUDIT",
             settings.chunking.strategy,
         )
-        return False
-    return True
+        return None
+    return mode
 
 
 def _log_extensions(settings: IndexerSettings) -> frozenset[str]:
