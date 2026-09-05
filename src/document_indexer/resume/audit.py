@@ -1,8 +1,9 @@
-"""One-shot resume parse audit: Docling + parser, no LLM / embed / Qdrant."""
+"""One-shot resume audits: Docling + parser (+ LLM), no embed / Qdrant."""
 
 from __future__ import annotations
 
-import csv
+import dataclasses
+import json
 import logging
 import os
 import time
@@ -13,21 +14,20 @@ from typing import Any
 from document_indexer.adapters.document_readers import PictureDescriptionConfig
 from document_indexer.config import IndexerSettings
 from document_indexer.domain.documents import iter_document_files, resolve_index_extensions
-from document_indexer.resume.chunker import ResumeProjectChunker
-from document_indexer.indexer import build_source
+from document_indexer.indexer import build_resume_chunker, build_source
 from document_indexer.infra.logging_config import configure_logging
+from document_indexer.resume.chunker import ResumeProjectChunker
+from document_indexer.resume.report import (
+    empty_row,
+    format_resume_report,
+    publish_resume_report,
+    row_from_chunks,
+)
 
 logger = logging.getLogger(__name__)
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
-_CSV_FIELDS = (
-    "source_path",
-    "candidate_name",
-    "candidate_position",
-    "project_count",
-    "prose_count",
-    "error",
-)
+_CHUNKS_BASENAME = "resume_chunks.jsonl"
 
 ConvertFn = Callable[[Path], Any]
 
@@ -37,95 +37,72 @@ def parse_only_enabled(environ: Mapping[str, str] | None = None) -> bool:
     return str(env.get("RESUME_PARSE_ONLY", "")).strip().lower() in _TRUTHY
 
 
+def llm_audit_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    env = os.environ if environ is None else environ
+    return str(env.get("RESUME_LLM_AUDIT", "")).strip().lower() in _TRUTHY
+
+
 def run_resume_parse_audit(
     settings: IndexerSettings,
     *,
     convert: ConvertFn | None = None,
     chunker: ResumeProjectChunker | None = None,
+    with_llm: bool = False,
 ) -> list[dict[str, Any]]:
-    """Walk the watch path, parse projects, print and save counts. Does not index."""
+    """Walk the watch path, chunk every resume, print and save the report. Does not index.
+
+    ``with_llm=False`` is the parser-only audit (``RESUME_PARSE_ONLY``);
+    ``with_llm=True`` also runs the LLM steps (``RESUME_LLM_AUDIT``) and dumps
+    every chunk into ``resume_chunks.jsonl`` for manual review.
+    """
     configure_logging(settings.log_level)
     allowed = resolve_index_extensions(settings.index_extensions)
     source = build_source(settings, allowed_extensions=allowed)
     root = source.prepare()
     files = iter_document_files(root, allowed_extensions=allowed)
-    parser = chunker or ResumeProjectChunker(
-        window_chars=settings.chunking.window_chars,
-        window_overlap=settings.chunking.window_overlap,
-    )
+    parser = chunker or build_resume_chunker(settings, with_llm=with_llm)
     convert_fn = convert or _docling_convert()
+    mode = "llm" if with_llm else "parser"
     logger.info(
-        "Resume parse-only start path=%s files=%s (no LLM, no embed, no Qdrant)",
+        "Resume audit start mode=%s path=%s files=%s (no embed, no Qdrant)",
+        mode,
         root,
         len(files),
     )
     started = time.perf_counter()
     rows: list[dict[str, Any]] = []
+    dump: list[dict[str, Any]] = []
     for path in files:
         relative = path.relative_to(root).as_posix()
-        rows.append(_audit_one(path, relative=relative, chunker=parser, convert=convert_fn))
+        row, chunks = _audit_one(path, relative=relative, chunker=parser, convert=convert_fn)
+        rows.append(row)
+        dump.extend(_chunk_records(relative, chunks))
     elapsed = time.perf_counter() - started
-    report = format_audit_report(rows)
     logger.info(
-        "Resume parse-only done files=%s with_projects=%s without_projects=%s "
+        "Resume audit done mode=%s files=%s with_projects=%s without_projects=%s "
         "errors=%s elapsed=%.2fs",
+        mode,
         len(rows),
         sum(1 for row in rows if not row["error"] and row["project_count"] > 0),
         sum(1 for row in rows if not row["error"] and row["project_count"] == 0),
         sum(1 for row in rows if row["error"]),
         elapsed,
     )
-    print(report, flush=True)
-    csv_path = _write_audit_csv(str(root), rows)
-    logger.info("Resume parse-only counts saved path=%s", csv_path)
-    print(f"Таблица: {csv_path}", flush=True)
+    title = "Аудит резюме (парсер без LLM)" if not with_llm else "Аудит резюме (парсер + LLM)"
+    publish_resume_report(str(root), rows, title=title)
+    if with_llm:
+        try:
+            dump_path = _write_chunks_jsonl(str(root), dump)
+        except OSError:
+            logger.exception("Could not write resume chunks JSONL")
+        else:
+            logger.info("Resume chunks saved path=%s records=%s", dump_path, len(dump))
+            print(f"Чанки: {dump_path}", flush=True)
     return rows
 
 
-def row_from_chunks(relative: str, chunks: Sequence[Any]) -> dict[str, Any]:
-    extra = (chunks[0].extra_fields or {}) if chunks else {}
-    return {
-        "source_path": relative,
-        "candidate_name": extra.get("candidate_name"),
-        "candidate_position": extra.get("candidate_position"),
-        "project_count": sum(1 for chunk in chunks if chunk.chunk_type == "project"),
-        "prose_count": sum(1 for chunk in chunks if chunk.chunk_type == "prose"),
-        "error": None,
-    }
-
-
 def format_audit_report(rows: Sequence[Mapping[str, Any]]) -> str:
-    ok = [row for row in rows if not row.get("error")]
-    missing = [row for row in ok if int(row.get("project_count") or 0) == 0]
-    errors = [row for row in rows if row.get("error")]
-    lines = [
-        f"Парсер без LLM: файлов={len(rows)} с проектами="
-        f"{len(ok) - len(missing)} без проектов={len(missing)} ошибок={len(errors)}"
-    ]
-    if missing:
-        lines.append(f"Резюме без выделенных проектов ({len(missing)} из {len(ok)}):")
-        for row in missing:
-            lines.append(
-                f"  {row.get('candidate_name') or '?'}  "
-                f"{row.get('candidate_position') or 'роль не распознана'}  "
-                f"{row.get('source_path')}  prose={row.get('prose_count')}"
-            )
-    if errors:
-        lines.append(f"Ошибки конвертации ({len(errors)}):")
-        for row in errors:
-            lines.append(f"  {row.get('source_path')}  {row.get('error')}")
-    lines.append("Резюме — число проектов:")
-    for row in rows:
-        if row.get("error"):
-            count = "err"
-        else:
-            count = str(row.get("project_count") or 0)
-        lines.append(
-            f"  {count:>4}  {row.get('candidate_name') or '?'}  "
-            f"{row.get('candidate_position') or 'роль не распознана'}  "
-            f"{row.get('source_path')}"
-        )
-    return "\n".join(lines)
+    return format_resume_report(rows, title="Аудит резюме")
 
 
 def _audit_one(
@@ -134,30 +111,56 @@ def _audit_one(
     relative: str,
     chunker: ResumeProjectChunker,
     convert: ConvertFn,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], list[Any]]:
     try:
         document = convert(path)
-        chunks = chunker.chunk_document(document, path_name=relative)
+        chunks = list(chunker.chunk_document(document, path_name=relative))
     except Exception as exc:
-        logger.exception("Resume parse-only failed source=%s", relative)
-        return {
-            "source_path": relative,
-            "candidate_name": None,
-            "candidate_position": None,
-            "project_count": 0,
-            "prose_count": 0,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+        logger.exception("Resume audit failed source=%s", relative)
+        row = empty_row(relative)
+        row["error"] = f"{type(exc).__name__}: {exc}"
+        return row, []
     row = row_from_chunks(relative, chunks)
+    stats = getattr(chunker, "last_stats", None)
+    if stats is not None:
+        row["parser_projects"] = stats.parser_projects
+        row["llm_calls"] = ",".join(stats.llm_calls)
+        row["ungrounded_dropped"] = stats.ungrounded_dropped
+        row["review_reason"] = stats.review_reason
     logger.info(
-        "Resume parse-only source=%s name=%s position=%s projects=%s prose=%s",
+        "Resume audit source=%s name=%s position=%s projects=%s llm=%s experience=%s prose=%s",
         relative,
         row["candidate_name"],
         row["candidate_position"],
         row["project_count"],
+        row["llm_project_count"],
+        row["experience_count"],
         row["prose_count"],
     )
-    return row
+    return row, chunks
+
+
+def _chunk_records(relative: str, chunks: Sequence[Any]) -> list[dict[str, Any]]:
+    records = []
+    for index, chunk in enumerate(chunks):
+        if dataclasses.is_dataclass(chunk):
+            data = dataclasses.asdict(chunk)
+        else:
+            data = {
+                "text": getattr(chunk, "text", ""),
+                "chunk_type": getattr(chunk, "chunk_type", ""),
+                "extra_fields": dict(getattr(chunk, "extra_fields", {}) or {}),
+            }
+        records.append(
+            {
+                "source_path": relative,
+                "chunk_index": index,
+                "chunk_type": data.get("chunk_type"),
+                "text": data.get("text"),
+                "fields": data.get("extra_fields") or {},
+            }
+        )
+    return records
 
 
 def _docling_convert() -> ConvertFn:
@@ -173,20 +176,19 @@ def _docling_convert() -> ConvertFn:
     return convert
 
 
-def _write_audit_csv(watch_path: str, rows: Sequence[Mapping[str, Any]]) -> Path:
+def _write_chunks_jsonl(watch_path: str, records: Sequence[Mapping[str, Any]]) -> Path:
     candidates = [
-        Path(watch_path) / ".resume_project_stats.csv",
-        Path(watch_path).resolve().parent / "resume_project_stats.csv",
-        Path("/tmp/resume_project_stats.csv"),
+        Path(watch_path) / f".{_CHUNKS_BASENAME}",
+        Path(watch_path).resolve().parent / _CHUNKS_BASENAME,
+        Path("/tmp") / _CHUNKS_BASENAME,
     ]
     last_error: OSError | None = None
     for path in candidates:
         try:
-            with path.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=_CSV_FIELDS, extrasaction="ignore")
-                writer.writeheader()
-                writer.writerows(rows)
+            with path.open("w", encoding="utf-8") as handle:
+                for record in records:
+                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             return path
         except OSError as exc:
             last_error = exc
-    raise OSError("Could not write resume parse-only CSV") from last_error
+    raise OSError("Could not write resume chunks JSONL") from last_error

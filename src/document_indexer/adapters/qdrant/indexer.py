@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import logging
 import math
@@ -429,37 +428,21 @@ class QdrantIndexer:
             "resume"
         ):
             return
-        rows = collect_resume_project_stats(
-            self._store.scroll_payloads(
-                ["source_path", "chunk_type", "candidate_name"]
-            )
+        from document_indexer.resume.report import (
+            REPORT_PAYLOAD_KEYS,
+            collect_resume_report,
+            publish_resume_report,
         )
+
+        rows = collect_resume_report(self._store.scroll_payloads(list(REPORT_PAYLOAD_KEYS)))
         if not rows:
-            logger.info("Resume project stats collection=%s files=0", self._collection)
+            logger.info("Resume report collection=%s files=0", self._collection)
             return
-        missing = [row for row in rows if row["project_count"] == 0]
-        logger.info(
-            "Resume project stats collection=%s files=%s with_projects=%s "
-            "without_projects=%s",
-            self._collection,
-            len(rows),
-            len(rows) - len(missing),
-            len(missing),
+        publish_resume_report(
+            watch_path,
+            rows,
+            title=f"Отчёт по резюме после переиндексации (collection={self._collection})",
         )
-        if missing:
-            lines = [
-                f"Резюме без выделенных проектов ({len(missing)} из {len(rows)}):"
-            ]
-            for row in missing:
-                lines.append(
-                    f"  {row['candidate_name'] or '?'}  {row['source_path']}  "
-                    f"prose={row['prose_count']}"
-                )
-            message = "\n".join(lines)
-            logger.warning(message)
-            print(message, flush=True)
-        csv_path = _write_resume_stats_csv(watch_path, rows)
-        logger.info("Resume project counts saved path=%s", csv_path)
 
     def _is_indexable_relative(self, relative: str) -> bool:
         path = Path(relative)
@@ -474,84 +457,29 @@ class QdrantIndexer:
         return suffix in allowed
 
 
-def collect_resume_project_stats(
-    payloads: Sequence[Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    """Group Qdrant points by resume file: project vs prose chunk counts."""
-    per_file: dict[str, dict[str, Any]] = {}
-    for payload in payloads:
-        source = str(payload.get("source_path") or "")
-        if not source:
-            continue
-        row = per_file.setdefault(
-            source,
-            {
-                "source_path": source,
-                "candidate_name": None,
-                "project_count": 0,
-                "prose_count": 0,
-            },
-        )
-        name = payload.get("candidate_name")
-        if name and not row["candidate_name"]:
-            row["candidate_name"] = str(name)
-        kind = str(payload.get("chunk_type") or "")
-        if kind == "project":
-            row["project_count"] += 1
-        elif kind == "prose":
-            row["prose_count"] += 1
-    return [per_file[key] for key in sorted(per_file)]
-
-
 def _log_resume_file_chunks(relative: str, chunks: Sequence[Any]) -> None:
     extra = chunks[0].extra_fields or {}
     if "candidate_name" not in extra and chunks[0].chunk_type != "project":
         return
-    project_n = sum(1 for chunk in chunks if chunk.chunk_type == "project")
-    prose_n = sum(1 for chunk in chunks if chunk.chunk_type == "prose")
+    counts = {"project": 0, "experience": 0, "profile": 0, "prose": 0}
+    for chunk in chunks:
+        counts[chunk.chunk_type] = counts.get(chunk.chunk_type, 0) + 1
     logger.info(
-        "Resume chunks path=%s name=%s projects=%s prose=%s",
+        "Resume chunks path=%s name=%s projects=%s experience=%s profile=%s prose=%s",
         relative,
         extra.get("candidate_name"),
-        project_n,
-        prose_n,
+        counts["project"],
+        counts["experience"],
+        counts["profile"],
+        counts["prose"],
     )
-    if project_n == 0:
+    if counts["project"] == 0 and counts["experience"] == 0:
         logger.warning(
-            "Resume without projects source=%s name=%s prose_chunks=%s",
+            "Resume without projects or jobs source=%s name=%s prose_chunks=%s needs_review",
             relative,
             extra.get("candidate_name") or "?",
-            prose_n,
+            counts["prose"],
         )
-
-
-def _write_resume_stats_csv(
-    watch_path: str,
-    rows: Sequence[Mapping[str, Any]],
-) -> Path:
-    candidates = [
-        Path(watch_path) / ".resume_project_stats.csv",
-        Path(watch_path).resolve().parent / "resume_project_stats.csv",
-        Path("/tmp/resume_project_stats.csv"),
-    ]
-    last_error: OSError | None = None
-    for path in candidates:
-        try:
-            _dump_resume_stats_csv(path, rows)
-            return path
-        except OSError as exc:
-            last_error = exc
-    raise OSError("Could not write resume project stats CSV") from last_error
-
-
-def _dump_resume_stats_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=("source_path", "candidate_name", "project_count", "prose_count"),
-        )
-        writer.writeheader()
-        writer.writerows(rows)
 
 
 def file_content_hash(

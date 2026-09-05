@@ -8,10 +8,10 @@ import pytest
 from document_indexer.infra.embeddings import OllamaEmbedder
 from document_indexer.adapters.qdrant_indexer import (
     QdrantIndexer,
-    collect_resume_project_stats,
     file_content_hash,
 )
 from document_indexer.domain.models import DocumentChunk
+from document_indexer.resume.report import collect_resume_report
 
 
 class FakeEmbedder:
@@ -72,40 +72,42 @@ def test_qdrant_indexer_indexes_reader_chunks(tmp_path: Path) -> None:
     assert points[0].payload["chunk_type"] == "prose"
 
 
-def test_collect_resume_project_stats_groups_by_source() -> None:
-    rows = collect_resume_project_stats(
+def test_collect_resume_report_groups_by_source() -> None:
+    rows = collect_resume_report(
         [
             {
                 "source_path": "Власова/Власова_CV_RU.docx",
                 "chunk_type": "prose",
                 "candidate_name": "Елена Власова",
+                "needs_review": True,
             },
             {
                 "source_path": "Иванов/cv.docx",
                 "chunk_type": "project",
                 "candidate_name": "Иван Иванов",
+                "candidate_position": "архитектор",
+                "extraction_source": "parser",
             },
             {
                 "source_path": "Иванов/cv.docx",
                 "chunk_type": "project",
                 "candidate_name": "Иван Иванов",
+                "extraction_source": "llm",
             },
         ]
     )
-    assert rows == [
-        {
-            "source_path": "Власова/Власова_CV_RU.docx",
-            "candidate_name": "Елена Власова",
-            "project_count": 0,
-            "prose_count": 1,
-        },
-        {
-            "source_path": "Иванов/cv.docx",
-            "candidate_name": "Иван Иванов",
-            "project_count": 2,
-            "prose_count": 0,
-        },
-    ]
+    by_path = {row["source_path"]: row for row in rows}
+    vlasova = by_path["Власова/Власова_CV_RU.docx"]
+    assert vlasova["candidate_name"] == "Елена Власова"
+    assert vlasova["project_count"] == 0
+    assert vlasova["prose_count"] == 1
+    assert vlasova["needs_review"] is True
+    ivanov = by_path["Иванов/cv.docx"]
+    assert ivanov["candidate_position"] == "архитектор"
+    assert ivanov["project_count"] == 2
+    assert ivanov["llm_project_count"] == 1
+    assert ivanov["needs_review"] is False
+    assert [row["candidate_name"] for row in rows] == ["Елена Власова", "Иван Иванов"]
 
 
 def test_qdrant_indexer_stores_one_table_point_and_aggregates_parts(

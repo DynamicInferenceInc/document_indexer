@@ -32,6 +32,8 @@ for extra in ("docling", "runtime", "smb"):
     deps.extend(optional[extra])
 deps.extend(data["build-system"]["requires"])
 subprocess.check_call(["python", "-m", "pip", "install", "--upgrade", "pip"])
+# CPU wheels for both x86_64 and aarch64 (DGX Spark / Grace); PyPI is the fallback
+# when the CPU index has no wheel for the current platform.
 subprocess.check_call(
     [
         "python",
@@ -40,6 +42,8 @@ subprocess.check_call(
         "install",
         "--index-url",
         "https://download.pytorch.org/whl/cpu",
+        "--extra-index-url",
+        "https://pypi.org/simple",
         "torch",
         "torchvision",
     ]
