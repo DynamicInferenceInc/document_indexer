@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "jobs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "employer": {"type": ["string", "null"]},
+          "period": {"type": ["string", "null"]},
+          "position": {"type": ["string", "null"]},
+          "work_performed": {"type": ["string", "null"]},
+          "systems": {"type": ["string", "null"]}
+        },
+        "required": ["employer", "period", "position", "work_performed", "systems"]
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "total_experience": {"type": ["string", "null"]},
+        "skills": {"type": ["string", "null"]},
+        "platforms": {"type": ["string", "null"]},
+        "directions": {"type": ["string", "null"]}
+      },
+      "required": ["total_experience", "skills", "platforms", "directions"]
+    }
+  },
+  "required": ["jobs", "profile"]
+}

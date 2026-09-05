@@ -46,6 +46,20 @@ _PROJECT_HINT = re.compile(r"(проект|внедрен|переход|миг�
 _TABLE_SEP_CHARS = re.compile(r"^[\s|:\-]+$")
 _LINE_BULLET = re.compile(r"^(?:[-*•–—]+\s+|\d+[.)]\s+)")
 _MARKDOWN_BOLD = re.compile(r"\*\*([^*]+)\*\*")
+_DATE_RANGE = re.compile(
+    r"(?:\d{1,2}[./]\d{4}|\d{4}|"
+    r"(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)\w*\s+\d{4})"
+    r"\s*[-–—]\s*"
+    r"(?:\d{1,2}[./]\d{4}|\d{4}|наст|н\.\s*в|по\s+настоящ|текущ|сейчас|"
+    r"(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)\w*\s+\d{4})",
+    re.I,
+)
+_EXPERIENCE_WORDS = re.compile(
+    r"(проект|заказчик|внедрен|опыт\s+работы|обязанност|должност|компани|"
+    r"\bооо\b|\bао\b|\bпао\b|\bзао\b|место\s+работы|работодател|достижени)",
+    re.I,
+)
+_MIN_EXPERIENCE_HITS = 2
 
 _FIELD_TITLES = {
     "customer": "Заказчик",
@@ -130,28 +144,41 @@ def parse_projects(
     tables: list[list[list[str]]] | None = None,
 ) -> list[dict[str, str | None]]:
     """One dict per project from Docling grids, markdown tables or labeled lines."""
-    projects: list[dict[str, str | None]] = []
+    found: list[dict[str, str | None]] = []
+    for table in list(tables or []) + _markdown_tables(text):
+        found.extend(_projects_from_table(table))
+    found.extend(_projects_from_scattered_label_rows(_all_pipe_rows(text)))
+    found.extend(_projects_from_blocks(text))
+    return merge_projects([], found)
 
-    def add(item: dict[str, str | None]) -> None:
+
+def same_project(left: dict[str, str | None], right: dict[str, str | None]) -> bool:
+    """Same identity, or one is a filled-field subset of the other."""
+    ident = _project_identity(left)
+    if ident and ident == _project_identity(right):
+        return True
+    return _covers(left, right) or _covers(right, left)
+
+
+def merge_projects(
+    projects: list[dict[str, str | None]],
+    items: list[dict[str, str | None]],
+) -> list[dict[str, str | None]]:
+    """Append ``items`` to ``projects``, collapsing duplicates and partial repeats."""
+    merged = [dict(item) for item in projects]
+    for item in items:
         if _is_junk(item):
-            return
+            continue
         ident = _project_identity(item)
-        for index, existing in enumerate(projects):
+        for index, existing in enumerate(merged):
             same = bool(ident) and ident == _project_identity(existing)
             if not same and not _covers(existing, item) and not _covers(item, existing):
                 continue
-            projects[index] = _prefer(item, existing)
-            return
-        projects.append(item)
-
-    for table in list(tables or []) + _markdown_tables(text):
-        for item in _projects_from_table(table):
-            add(item)
-    for item in _projects_from_scattered_label_rows(_all_pipe_rows(text)):
-        add(item)
-    for item in _projects_from_blocks(text):
-        add(item)
-    return _drop_subset_projects(projects)
+            merged[index] = _prefer(item, existing)
+            break
+        else:
+            merged.append(dict(item))
+    return _drop_subset_projects(merged)
 
 
 def format_project_text(project: dict[str, str | None]) -> str:
@@ -161,6 +188,122 @@ def format_project_text(project: dict[str, str | None]) -> str:
         if value:
             lines.append(f"{title}: {value}")
     return "\n".join(lines)
+
+
+def empty_project() -> dict[str, str | None]:
+    return {key: None for key in _FIELD_TITLES}
+
+
+def residual_text(
+    text: str,
+    header: dict[str, str | None] | None = None,
+    projects: list[dict[str, str | None]] | None = None,
+) -> str:
+    """Resume text minus the header values and every line already inside a parsed project.
+
+    What is left is what the parser did not understand; the LLM only sees this part.
+    """
+    covered = [
+        _norm_field(value)
+        for project in projects or []
+        for value in project.values()
+        if _clean(value)
+    ]
+    covered.extend(
+        _norm_field(value) for value in (header or {}).values() if _clean(value)
+    )
+    covered = [value for value in covered if value]
+    kept: list[str] = []
+    blank_pending = False
+    for raw in text.splitlines():
+        line = raw.strip().strip("*")
+        if not line:
+            blank_pending = bool(kept)
+            continue
+        if _is_table_sep(line):
+            continue
+        pieces = _row_cells(line) if _is_table_row(line) else [line]
+        remaining: list[str] = []
+        for piece in pieces:
+            value = _clean(piece)
+            if not value or _field_key(value) or _POSITION_HEADER.match(value):
+                continue
+            field, rest = _line_field_value(value)
+            if field and rest is not None:
+                value = _clean(rest)
+                if not value:
+                    continue
+            if _is_covered(value, covered):
+                continue
+            remaining.append(value)
+        if not remaining:
+            continue
+        if blank_pending:
+            kept.append("")
+            blank_pending = False
+        kept.append(" | ".join(remaining) if len(remaining) > 1 else remaining[0])
+    return "\n".join(kept).strip()
+
+
+def has_experience_hints(text: str) -> bool:
+    """True when the text still looks like work history: date ranges or job words."""
+    if not text.strip():
+        return False
+    if _DATE_RANGE.search(text):
+        return True
+    return len(_EXPERIENCE_WORDS.findall(text)) >= _MIN_EXPERIENCE_HITS
+
+
+def split_sections(text: str, *, max_chars: int, overlap_chars: int = 0) -> list[str]:
+    """Paragraph-aligned pieces of at most ``max_chars`` with a paragraph tail carried over."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return []
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+    if len(normalized) <= max_chars:
+        return [normalized]
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", normalized) if part.strip()]
+    expanded: list[str] = []
+    for paragraph in paragraphs:
+        if len(paragraph) <= max_chars:
+            expanded.append(paragraph)
+            continue
+        for start in range(0, len(paragraph), max_chars):
+            expanded.append(paragraph[start : start + max_chars])
+    sections: list[str] = []
+    current: list[str] = []
+    size = 0
+    for paragraph in expanded:
+        extra = len(paragraph) + (2 if current else 0)
+        if current and size + extra > max_chars:
+            sections.append("\n\n".join(current))
+            tail: list[str] = []
+            tail_size = 0
+            for previous in reversed(current):
+                if tail_size + len(previous) > overlap_chars:
+                    break
+                tail.insert(0, previous)
+                tail_size += len(previous) + 2
+            current = tail
+            size = sum(len(item) + 2 for item in current)
+        current.append(paragraph)
+        size += extra
+    if current:
+        sections.append("\n\n".join(current))
+    return sections
+
+
+def _is_covered(value: str, covered: list[str]) -> bool:
+    normalized = _norm_field(value)
+    if not normalized:
+        return True
+    for known in covered:
+        if normalized == known or normalized in known:
+            return True
+        if len(known) >= 12 and known in normalized:
+            return True
+    return False
 
 
 def _header_tokens(text: str) -> list[str]:

@@ -36,8 +36,12 @@ all = [
 packages = ["src/document_indexer"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/document_indexer/resume/schema.json" = "document_indexer/resume/schema.json"
 "src/document_indexer/resume/prompt.txt" = "document_indexer/resume/prompt.txt"
+"src/document_indexer/resume/prompt_projects.txt" = "document_indexer/resume/prompt_projects.txt"
+"src/document_indexer/resume/prompt_refine.txt" = "document_indexer/resume/prompt_refine.txt"
+"src/document_indexer/resume/prompt_experience.txt" = "document_indexer/resume/prompt_experience.txt"
+"src/document_indexer/resume/schema_projects.json" = "document_indexer/resume/schema_projects.json"
+"src/document_indexer/resume/schema_experience.json" = "document_indexer/resume/schema_experience.json"
 "src/document_indexer/resume/sample.md" = "document_indexer/resume/sample.md"
 
 [tool.pytest.ini_options]

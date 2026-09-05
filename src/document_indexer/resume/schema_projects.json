@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "customer": {"type": ["string", "null"]},
+          "duration": {"type": ["string", "null"]},
+          "project_industry": {"type": ["string", "null"]},
+          "project_description": {"type": ["string", "null"]},
+          "project_position": {"type": ["string", "null"]},
+          "work_performed": {"type": ["string", "null"]}
+        },
+        "required": [
+          "customer",
+          "duration",
+          "project_industry",
+          "project_description",
+          "project_position",
+          "work_performed"
+        ]
+      }
+    }
+  },
+  "required": ["projects"]
+}
