@@ -1,10 +1,10 @@
-from document_indexer.examples.resume.audit import (
+from document_indexer.resume.audit import (
     parse_only_enabled,
     run_resume_parse_audit,
 )
-from document_indexer.examples.resume.chunker import ResumeProjectChunker
-from document_indexer.examples.resume.enricher import FunctionalDirectionEnricher
-from document_indexer.examples.resume.payload import (
+from document_indexer.resume.chunker import ResumeProjectChunker
+from document_indexer.resume.enricher import FunctionalDirectionEnricher
+from document_indexer.resume.payload import (
     INDEX_VERSION,
     ResumePayloadBuilder,
     load_resume_prompt,

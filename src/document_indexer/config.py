@@ -61,11 +61,11 @@ class ModelSettings(BaseModel):
 
 
 class ChunkingSettings(BaseModel):
-    """Which chunker to use and sliding-window size for resume fallback."""
+    """``table_aware`` documents or ``resume_project`` CVs."""
 
     model_config = ConfigDict(extra="forbid")
 
-    strategy: Literal["table_aware", "resume_project", "hybrid"] = "table_aware"
+    strategy: Literal["table_aware", "resume_project"] = "table_aware"
     merge_peers: bool = True
     repeat_table_header: bool = False
     window_chars: int = 1200

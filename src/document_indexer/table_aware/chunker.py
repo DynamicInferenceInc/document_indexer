@@ -549,35 +549,3 @@ class TableAwareDocumentChunker:
             tokenizer=self._tokenizer,
             path_name=path_name,
         ).run()
-
-
-class HybridDocumentChunker:
-    """Vanilla Docling HybridChunker: each contextualized raw chunk is one point."""
-
-    def __init__(self, *, chunker: Any) -> None:
-        self._chunker = chunker
-
-    def chunk_document(self, document: Any, *, path_name: str) -> list[DocumentChunk]:
-        started = time.perf_counter()
-        chunks: list[DocumentChunk] = []
-        raw_count = 0
-        for raw in self._chunker.chunk(dl_doc=document):
-            raw_count += 1
-            text = str(self._chunker.contextualize(raw)).strip()
-            if not text:
-                continue
-            chunks.append(
-                DocumentChunk(
-                    text=text,
-                    headings=_headings_from_chunk(raw),
-                    chunk_type="prose",
-                )
-            )
-        logger.info(
-            "Hybrid chunker path=%s raw=%s stored=%s elapsed=%.2fs",
-            path_name,
-            raw_count,
-            len(chunks),
-            time.perf_counter() - started,
-        )
-        return chunks

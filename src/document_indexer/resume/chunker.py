@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from document_indexer.domain.models import DocumentChunk
-from document_indexer.examples.resume.parser import (
+from document_indexer.resume.parser import (
     document_tables,
     document_text,
     format_project_text,

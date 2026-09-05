@@ -11,7 +11,7 @@ from typing import Any
 
 import requests
 
-from document_indexer.adapters.docling_chunking import TableAwareDocumentChunker
+from document_indexer.table_aware.chunker import TableAwareDocumentChunker
 from document_indexer.adapters.docling_convert import (
     PictureDescriptionConfig,
     picture_description,

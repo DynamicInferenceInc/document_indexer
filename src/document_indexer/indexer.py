@@ -13,15 +13,11 @@ from docling.chunking import HybridChunker
 from docling.document_converter import DocumentConverter
 
 from document_indexer.adapters.document_readers import DoclingDocumentReader, PictureDescriptionConfig
-from document_indexer.adapters.docling_chunking import (
-    HybridDocumentChunker,
-    TableAwareDocumentChunker,
-)
 from document_indexer.adapters.docling_convert import (
     MarkdownChunkSerializerProvider,
     tokenizer_with_max_tokens,
 )
-from document_indexer.adapters.qdrant.payload import DEFAULT_INDEX_VERSION, PayloadBuilder
+from document_indexer.adapters.qdrant.payload import DEFAULT_INDEX_VERSION, DefaultPayloadBuilder, PayloadBuilder
 from document_indexer.adapters.qdrant_indexer import QdrantIndexer
 from document_indexer.config import IndexerSettings, LocalSourceSettings, SmbSourceSettings
 from document_indexer.domain.changes import FsChange
@@ -35,6 +31,7 @@ from document_indexer.sources.base import DocumentSource
 from document_indexer.sources.debounce import DebouncedReindex
 from document_indexer.sources.local import LocalFilesystemSource
 from document_indexer.sources.smb import SmbStagingSource
+from document_indexer.table_aware.chunker import TableAwareDocumentChunker
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +39,8 @@ logger = logging.getLogger(__name__)
 class DocumentIndexer:
     """Index documents from one configured source into one Qdrant collection.
 
-    One instance is one profile. Create several instances (or processes) for
-    independent sources, collections, or model overrides.
+    One instance is one profile: ``table_aware`` documents or resumes.
+    Create several instances (or processes) for independent sources or collections.
     """
 
     def __init__(
@@ -52,15 +49,12 @@ class DocumentIndexer:
         *,
         indexer: Indexer | None = None,
         source: DocumentSource | None = None,
-        payload_builder: PayloadBuilder | None = None,
-        enricher: DocumentEnricher | None = None,
-        document_chunker: DocumentChunker | None = None,
         configure_logs: bool = True,
     ) -> None:
         self._settings = settings if settings is not None else IndexerSettings()
         if configure_logs:
             configure_logging(self._settings.log_level)
-        self._parse_only = bool(self._settings.resume_parse_only)
+        self._parse_only = _resume_parse_only(self._settings)
         if self._parse_only:
             logger.warning(
                 "RESUME_PARSE_ONLY enabled: parser audit only "
@@ -70,12 +64,7 @@ class DocumentIndexer:
         if self._parse_only:
             self._core = indexer
         else:
-            self._core = indexer if indexer is not None else build_indexer(
-                self._settings,
-                payload_builder=payload_builder,
-                enricher=enricher,
-                document_chunker=document_chunker,
-            )
+            self._core = indexer if indexer is not None else build_indexer(self._settings)
         self._source = source if source is not None else build_source(
             self._settings,
             allowed_extensions=allowed,
@@ -169,7 +158,7 @@ class DocumentIndexer:
     def _run_parse_only_if_enabled(self) -> bool:
         if not self._parse_only:
             return False
-        from document_indexer.examples.resume.audit import run_resume_parse_audit
+        from document_indexer.resume.audit import run_resume_parse_audit
 
         run_resume_parse_audit(self._settings)
         return True
@@ -218,13 +207,7 @@ class DocumentIndexer:
         self._source.stop()
 
 
-def build_indexer(
-    settings: IndexerSettings,
-    *,
-    payload_builder: PayloadBuilder | None = None,
-    enricher: DocumentEnricher | None = None,
-    document_chunker: DocumentChunker | None = None,
-) -> Indexer:
+def build_indexer(settings: IndexerSettings) -> Indexer:
     models = settings.models
     chunking = settings.chunking
     allowed = resolve_index_extensions(settings.index_extensions)
@@ -252,20 +235,13 @@ def build_indexer(
         concurrency=models.vlm_concurrency,
         area_threshold=models.picture_area_threshold,
     )
-    tokenizer = None
-    hybrid = None
-    if document_chunker is None:
-        document_chunker, hybrid, tokenizer = _build_document_chunker(settings)
+    document_chunker, hybrid, tokenizer, payload_builder, enricher = _build_profile(settings)
     logger.info(
         "Chunking strategy=%s window_chars=%s window_overlap=%s",
         chunking.strategy,
         chunking.window_chars,
         chunking.window_overlap,
     )
-    if settings.chunking.strategy == "resume_project" and not settings.resume_parse_only:
-        from document_indexer.examples.resume.enricher import bind_resume_enricher
-
-        enricher = bind_resume_enricher(settings, enricher)
     reader = DoclingDocumentReader(
         DocumentConverter(format_options=picture.format_options()),
         hybrid,
@@ -274,10 +250,11 @@ def build_indexer(
         tokenizer=tokenizer,
         picture=picture,
     )
-    builder_version = getattr(payload_builder, "index_version", "") if payload_builder is not None else ""
-    index_version = settings.qdrant.index_version or builder_version or DEFAULT_INDEX_VERSION
-    if not settings.qdrant.index_version and chunking.strategy == "hybrid":
-        index_version = "hybrid-v1"
+    index_version = (
+        settings.qdrant.index_version
+        or getattr(payload_builder, "index_version", "")
+        or DEFAULT_INDEX_VERSION
+    )
     return QdrantIndexer(
         qdrant_url=settings.qdrant.url,
         collection=settings.qdrant.collection,
@@ -293,13 +270,29 @@ def build_indexer(
     )
 
 
-def _build_document_chunker(
+def _build_profile(
     settings: IndexerSettings,
-) -> tuple[DocumentChunker, Any, Any]:
+) -> tuple[DocumentChunker, Any, Any, PayloadBuilder, DocumentEnricher | None]:
     chunking = settings.chunking
     if chunking.strategy == "resume_project":
-        from document_indexer.examples.resume.chunker import ResumeProjectChunker
+        from document_indexer.resume.chunker import ResumeProjectChunker
+        from document_indexer.resume.enricher import FunctionalDirectionEnricher
+        from document_indexer.resume.payload import (
+            ResumePayloadBuilder,
+            load_resume_prompt,
+            load_resume_schema,
+        )
 
+        enricher: DocumentEnricher | None = None
+        model = settings.models.extraction_model.strip()
+        if model and not settings.resume_parse_only:
+            enricher = FunctionalDirectionEnricher(
+                load_resume_schema(),
+                load_resume_prompt(),
+                base_url=settings.models.ollama_base_url,
+                model=model,
+                timeout_sec=settings.models.extraction_timeout_sec,
+            )
         return (
             ResumeProjectChunker(
                 window_chars=chunking.window_chars,
@@ -307,10 +300,10 @@ def _build_document_chunker(
             ),
             None,
             None,
+            ResumePayloadBuilder(),
+            enricher,
         )
-    if chunking.strategy == "hybrid":
-        hybrid = HybridChunker()
-        return HybridDocumentChunker(chunker=hybrid), hybrid, None
+
     tokenizer = tokenizer_with_max_tokens(settings.models.chunk_size)
     hybrid = HybridChunker(
         merge_peers=chunking.merge_peers,
@@ -327,6 +320,8 @@ def _build_document_chunker(
         ),
         hybrid,
         tokenizer,
+        DefaultPayloadBuilder(),
+        None,
     )
 
 
@@ -352,6 +347,18 @@ def reindex_once(settings: IndexerSettings | None = None) -> None:
 def run(settings: IndexerSettings | None = None) -> None:
     """Convenience wrapper around :meth:`DocumentIndexer.run`."""
     DocumentIndexer(settings).run()
+
+
+def _resume_parse_only(settings: IndexerSettings) -> bool:
+    if not settings.resume_parse_only:
+        return False
+    if settings.chunking.strategy != "resume_project":
+        logger.warning(
+            "RESUME_PARSE_ONLY ignored: CHUNKING__STRATEGY=%s (need resume_project)",
+            settings.chunking.strategy,
+        )
+        return False
+    return True
 
 
 def _log_extensions(settings: IndexerSettings) -> frozenset[str]:

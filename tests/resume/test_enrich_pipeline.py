@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 from document_indexer.adapters.qdrant.payload import IndexRecord
 from document_indexer.adapters.qdrant_indexer import QdrantIndexer
 from document_indexer.domain.models import DocumentChunk
-from document_indexer.examples.resume import (
+from document_indexer.resume import (
     INDEX_VERSION,
     FunctionalDirectionEnricher,
     ResumePayloadBuilder,
@@ -222,52 +222,8 @@ def test_resume_payload_window_has_name_and_position_without_project_fields() ->
     assert "solution_platform" not in payload
 
 
-def test_bind_replaces_json_schema_enricher_for_resume_strategy() -> None:
-    from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
-    from document_indexer.config import ChunkingSettings, IndexerSettings, ModelSettings
-    from document_indexer.examples.resume.enricher import bind_resume_enricher
-
-    settings = IndexerSettings(
-        _env_file=None,
-        chunking=ChunkingSettings(strategy="resume_project"),
-        models=ModelSettings(extraction_model="qwen3:4b"),
-    )
-    incoming = JsonSchemaEnricher(load_resume_schema(), load_resume_prompt(), chat=FakeChat())
-    bound = bind_resume_enricher(settings, incoming)
-    assert isinstance(bound, FunctionalDirectionEnricher)
-
-
-def test_bind_skips_enricher_when_parse_only() -> None:
-    from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
-    from document_indexer.config import ChunkingSettings, IndexerSettings, ModelSettings
-    from document_indexer.examples.resume.enricher import bind_resume_enricher
-
-    settings = IndexerSettings(
-        _env_file=None,
-        chunking=ChunkingSettings(strategy="resume_project"),
-        models=ModelSettings(extraction_model="qwen3:4b"),
-        resume_parse_only=True,
-    )
-    incoming = JsonSchemaEnricher(load_resume_schema(), load_resume_prompt(), chat=FakeChat())
-    assert bind_resume_enricher(settings, incoming) is None
-
-
-def test_bind_keeps_json_schema_enricher_for_table_aware() -> None:
-    from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
-    from document_indexer.config import ChunkingSettings, IndexerSettings, ModelSettings
-    from document_indexer.examples.resume.enricher import bind_resume_enricher
-
-    settings = IndexerSettings(
-        _env_file=None,
-        chunking=ChunkingSettings(strategy="table_aware"),
-        models=ModelSettings(extraction_model="qwen3:4b"),
-    )
-    incoming = JsonSchemaEnricher(load_resume_schema(), load_resume_prompt(), chat=FakeChat())
-    assert bind_resume_enricher(settings, incoming) is incoming
-
-
 def test_infer_solution_platform_explicit_and_transition() -> None:
-    from document_indexer.examples.resume.enricher import infer_solution_platform
+    from document_indexer.resume.enricher import infer_solution_platform
 
     assert infer_solution_platform("Функциональный консультант SAP MM") == "SAP"
     assert infer_solution_platform("Внедрение 1С:ERP") == "1С"

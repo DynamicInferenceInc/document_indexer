@@ -6,7 +6,7 @@ import pytest
 from docling_core.types.doc.items.table.table import TableItem
 from docling_core.types.doc.items.table.table_data import TableData
 
-from document_indexer.adapters.docling_chunking import split_oversized_text
+from document_indexer.table_aware.chunker import split_oversized_text
 from document_indexer.adapters.docling_convert import (
     chat_completions_url,
     format_picture_block,

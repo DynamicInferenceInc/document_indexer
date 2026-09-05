@@ -36,9 +36,9 @@ all = [
 packages = ["src/document_indexer"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/document_indexer/examples/resume/schema.json" = "document_indexer/examples/resume/schema.json"
-"src/document_indexer/examples/resume/prompt.txt" = "document_indexer/examples/resume/prompt.txt"
-"src/document_indexer/examples/resume/sample.md" = "document_indexer/examples/resume/sample.md"
+"src/document_indexer/resume/schema.json" = "document_indexer/resume/schema.json"
+"src/document_indexer/resume/prompt.txt" = "document_indexer/resume/prompt.txt"
+"src/document_indexer/resume/sample.md" = "document_indexer/resume/sample.md"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

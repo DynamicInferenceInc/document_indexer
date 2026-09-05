@@ -86,10 +86,13 @@ def test_nested_env(monkeypatch) -> None:
     assert settings.chunking.window_overlap == 80
 
 
-def test_hybrid_strategy_from_env(monkeypatch) -> None:
-    monkeypatch.setenv("CHUNKING__STRATEGY", "hybrid")
-    settings = IndexerSettings(_env_file=None)
-    assert settings.chunking.strategy == "hybrid"
+def test_unknown_chunking_strategy_is_rejected() -> None:
+    try:
+        IndexerSettings(_env_file=None, chunking={"strategy": "hybrid"})
+    except ValidationError as exc:
+        assert "strategy" in str(exc)
+    else:
+        raise AssertionError("expected ValidationError")
 
 
 def test_smb_source_requires_connection_fields() -> None:

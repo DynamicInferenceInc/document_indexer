@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from document_indexer.examples.resume import ResumeProjectChunker, load_resume_sample
-from document_indexer.examples.resume.parser import parse_header, parse_projects
+from document_indexer.resume import ResumeProjectChunker, load_resume_sample
+from document_indexer.resume.parser import parse_header, parse_projects
 
 
 def test_header_reads_unlabeled_fio_and_position() -> None:

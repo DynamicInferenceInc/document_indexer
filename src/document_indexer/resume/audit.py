@@ -13,7 +13,7 @@ from typing import Any
 from document_indexer.adapters.document_readers import PictureDescriptionConfig
 from document_indexer.config import IndexerSettings
 from document_indexer.domain.documents import iter_document_files, resolve_index_extensions
-from document_indexer.examples.resume.chunker import ResumeProjectChunker
+from document_indexer.resume.chunker import ResumeProjectChunker
 from document_indexer.indexer import build_source
 from document_indexer.infra.logging_config import configure_logging
 

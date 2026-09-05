@@ -1,8 +1,8 @@
 # document-indexer
 
-Python-модуль, который читает документы, режет их через Docling HybridChunker и кладёт векторы в Qdrant. Логика обработки документов, чанкирования и записи в Qdrant перенесена из `it-consultant-1c/reindex` без изменения алгоритмов.
-
-Пакет не содержит CLI. Один экземпляр `DocumentIndexer` — один профиль: свой источник, свой Qdrant URL и имя коллекции. Несколько сущностей запускаются как несколько экземпляров (или процессов) с разными настройками.
+Python-модуль, который индексирует документы в Qdrant в одном из двух режимов:
+`table_aware` (Docling HybridChunker + таблицы) или `resume_project` (проекты CV).
+Пакет не содержит CLI. Один экземпляр `DocumentIndexer` — один источник, одна коллекция и одна стратегия.
 
 ## Установка
 
@@ -109,12 +109,12 @@ hr = DocumentIndexer(ProfileSmb(
 | `QDRANT__EXTRA_PAYLOAD` | JSON-константы на каждую точку | `{}` |
 | `QDRANT__PAYLOAD_INDEXES` | keyword-индексы (через запятую); пусто = индексы builder’а | builder |
 | `QDRANT__DISTANCE` | cosine / dot / euclid | `cosine` |
-| `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = builder, `hybrid-v1` или `table-aware-v2` | пусто |
+| `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = `table-aware-v2` или `resume-v19` | пусто |
 | `MODELS__OLLAMA_BASE_URL` | embeddings, VLM, extraction LLM | `http://127.0.0.1:11434` |
 | `MODELS__EMBEDDING_MODEL` | модель эмбеддингов | `nomic-embed-text` |
-| `MODELS__EXTRACTION_MODEL` | text LLM для полей документа (`/api/chat`) | пусто = без enricher |
+| `MODELS__EXTRACTION_MODEL` | text LLM для полей резюме (`/api/chat`) | пусто = без enricher |
 | `MODELS__CHUNK_SIZE` | max tokens HybridChunker только для `table_aware` | `1024` |
-| `CHUNKING__STRATEGY` | `table_aware`, `resume_project` или `hybrid` | `table_aware` |
+| `CHUNKING__STRATEGY` | `table_aware` или `resume_project` | `table_aware` |
 | `CHUNKING__WINDOW_CHARS` / `CHUNKING__WINDOW_OVERLAP` | sliding window, если в резюме нет проектов | `1200` / `150` |
 | `MODELS__PICTURE_DESCRIPTION_ENABLED` | VLM-описания картинок | `true` |
 | `MODELS__VLM_MODEL` | модель описаний | `qwen3-vl:8b` |
@@ -156,39 +156,23 @@ Payload точек по умолчанию не менялся: `source_path`, `
 
 Кастомные поля **добавляются** к этим ключам. Ядро всегда перезаписывает `source_path`, `chunk_index`, `file_hash`, `index_version`.
 
-## Кастомный payload и LLM-поля
+## Два режима индексации
 
-`PayloadBuilder` раскладывает уже известные данные по ключам Qdrant. `DocumentEnricher` достаёт поля из текста (не VLM).
+`CHUNKING__STRATEGY` выбирает один из двух встроенных режимов. Плагины чанкера, payload и enricher снаружи не подключаются.
 
-Resume-профиль режет документ так: один проект — один чанк (`chunk_type=project`). Если проектов нет — overlapping windows (`chunk_type=prose`). На каждой точке лежат `candidate_name` и `candidate_position` из шапки (ФИО может быть без подписи). `functional_direction` всегда через LLM. `solution_platform` (`1С` или `SAP`) сначала из явного упоминания в роли/описании/работах, иначе из того же LLM-вызова. Строки-заголовки таблицы и неполные копии того же проекта отбрасываются. Пример CV: `examples/resume/sample.md`.
+**table_aware** (по умолчанию). Docling HybridChunker + постобработка таблиц: одна таблица — один чанк. Payload: `text`, `headings`, `chunk_type`, поля таблиц. Версия `table-aware-v2`.
+
+**resume_project**. Один проект — один чанк (`chunk_type=project`). Если проектов нет — overlapping windows (`chunk_type=prose`). На каждой точке лежат `candidate_name` и `candidate_position` из шапки (ФИО может быть без подписи). `functional_direction` всегда через LLM. `solution_platform` (`1С` или `SAP`) сначала из явного упоминания в роли/описании/работах, иначе из того же LLM-вызова. Строки-заголовки таблицы и неполные копии того же проекта отбрасываются. Пример CV: `resume/sample.md`.
 
 ```python
 from document_indexer import DocumentIndexer, ProfileLocal, QdrantSettings
-from document_indexer.examples.resume import (
-    INDEX_VERSION,
-    FunctionalDirectionEnricher,
-    ResumePayloadBuilder,
-    ResumeProjectChunker,
-    load_resume_prompt,
-    load_resume_schema,
-)
 
 settings = ProfileLocal(
-    qdrant=QdrantSettings(collection="docs-cv", index_version=INDEX_VERSION),
+    qdrant=QdrantSettings(collection="docs-cv"),
     models={"extraction_model": "qwen3:8b"},
     chunking={"strategy": "resume_project"},
 )
-DocumentIndexer(
-    settings,
-    payload_builder=ResumePayloadBuilder(),
-    document_chunker=ResumeProjectChunker(),
-    enricher=FunctionalDirectionEnricher(
-        load_resume_schema(),
-        load_resume_prompt(),
-        base_url=settings.models.ollama_base_url,
-        model=settings.models.extraction_model,
-    ),
-).run()
+DocumentIndexer(settings).run()
 ```
 
 Фильтр по полям одного проекта — обычный `FieldCondition` (массива `project_experiences` больше нет):
@@ -211,8 +195,6 @@ project_filter = qmodels.Filter(
 ```
 
 Новая схема — новая коллекция или bump `index_version`, иначе skip по hash не пересчитает поля.
-
-Без `payload_builder` / `enricher` поведение как у исходного reindex.
 
 ## Тесты
 

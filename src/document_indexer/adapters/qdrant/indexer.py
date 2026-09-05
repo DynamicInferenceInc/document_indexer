@@ -15,8 +15,6 @@ from typing import Any, Literal, overload
 
 from qdrant_client.http import models as qmodels
 
-from document_indexer.adapters.docling_chunking import is_useful_chunk_text
-from document_indexer.adapters.enrichment.noop import NoopEnricher
 from document_indexer.adapters.qdrant.payload import (
     DEFAULT_INDEX_VERSION,
     DefaultPayloadBuilder,
@@ -29,6 +27,7 @@ from document_indexer.domain.changes import FsChange
 from document_indexer.domain.documents import iter_document_files
 from document_indexer.ports import DocumentReader, Embedder
 from document_indexer.ports.enricher import DocumentEnricher
+from document_indexer.table_aware.chunker import is_useful_chunk_text
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +64,7 @@ class QdrantIndexer:
         self._document_reader = document_reader
         self._allowed_extensions = frozenset(allowed_extensions or ())
         self._payload_builder = payload_builder or DefaultPayloadBuilder()
-        self._enricher = enricher or NoopEnricher()
+        self._enricher: DocumentEnricher | None = enricher
         self._extra_payload = dict(extra_payload or {})
         self._payload_indexes = (
             tuple(payload_indexes)
@@ -300,15 +299,20 @@ class QdrantIndexer:
         _log_resume_file_chunks(relative, chunks)
 
         enrich_started = time.perf_counter()
-        try:
-            document_fields = dict(self._enricher.enrich(path, chunks) or {})
-        except Exception:
-            logger.exception("Document enrich failed path=%s; indexing without extra fields", relative)
-            document_fields = {}
+        document_fields: dict[str, Any] = {}
+        if self._enricher is not None:
+            try:
+                document_fields = dict(self._enricher.enrich(path, chunks) or {})
+            except Exception:
+                logger.exception(
+                    "Document enrich failed path=%s; indexing without extra fields",
+                    relative,
+                )
+                document_fields = {}
         logger.info(
             "Enrich done path=%s enricher=%s fields=%s elapsed=%.2fs",
             relative,
-            type(self._enricher).__name__,
+            type(self._enricher).__name__ if self._enricher is not None else "none",
             len(document_fields),
             time.perf_counter() - enrich_started,
         )

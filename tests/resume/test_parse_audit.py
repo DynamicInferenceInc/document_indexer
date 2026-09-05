@@ -7,13 +7,13 @@ from types import SimpleNamespace
 
 from document_indexer.config import LocalSourceSettings, ProfileLocal
 from document_indexer.domain.models import DocumentChunk
-from document_indexer.examples.resume.audit import (
+from document_indexer.resume.audit import (
     format_audit_report,
     parse_only_enabled,
     row_from_chunks,
     run_resume_parse_audit,
 )
-from document_indexer.examples.resume.chunker import ResumeProjectChunker
+from document_indexer.resume.chunker import ResumeProjectChunker
 
 
 def test_parse_only_enabled_reads_truthy_env() -> None:
@@ -138,12 +138,13 @@ def test_document_indexer_parse_only_skips_build_indexer(tmp_path: Path, monkeyp
         lambda *args, **kwargs: built.append("built") or MagicMock(),
     )
     monkeypatch.setattr(
-        "document_indexer.examples.resume.audit.run_resume_parse_audit",
+        "document_indexer.resume.audit.run_resume_parse_audit",
         lambda settings: built.append("audit") or [],
     )
     settings = IndexerSettings(
         _env_file=None,
         source=LocalSourceSettings(watch_path=str(watch)),
+        chunking={"strategy": "resume_project"},
         resume_parse_only=True,
     )
     DocumentIndexer(settings, configure_logs=False).run()

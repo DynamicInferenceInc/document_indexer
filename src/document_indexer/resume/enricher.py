@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from document_indexer.adapters.enrichment.json_schema import ChatCompleter, OllamaChatCompleter
+from document_indexer.adapters.enrichment.ollama import ChatCompleter, OllamaChatCompleter
 from document_indexer.domain.models import DocumentChunk
 
 logger = logging.getLogger(__name__)
@@ -134,42 +134,6 @@ def infer_solution_platform(*parts: object) -> str | None:
     if len(found) == 1:
         return next(iter(found))
     return None
-
-
-def bind_resume_enricher(settings: Any, enricher: Any) -> Any:
-    """Use per-project direction extraction when chunking resumes.
-
-    A whole-document JsonSchemaEnricher writes ``functional_direction`` once;
-    the payload reads ``functional_directions`` per chunk, so the field stays empty.
-    """
-    if getattr(settings, "resume_parse_only", False):
-        logger.info("Skip FunctionalDirectionEnricher: RESUME_PARSE_ONLY")
-        return None
-    if getattr(getattr(settings, "chunking", None), "strategy", None) != "resume_project":
-        return enricher
-    if isinstance(enricher, FunctionalDirectionEnricher):
-        return enricher
-    models = getattr(settings, "models", None)
-    model = str(getattr(models, "extraction_model", "") or "").strip()
-    from document_indexer.adapters.enrichment.json_schema import JsonSchemaEnricher
-
-    if not model:
-        return None if isinstance(enricher, JsonSchemaEnricher) else enricher
-    if enricher is not None and not isinstance(enricher, JsonSchemaEnricher):
-        return enricher
-    from document_indexer.examples.resume.payload import load_resume_prompt, load_resume_schema
-
-    logger.info(
-        "Using FunctionalDirectionEnricher for resume_project (was %s)",
-        type(enricher).__name__ if enricher is not None else "None",
-    )
-    return FunctionalDirectionEnricher(
-        load_resume_schema(),
-        load_resume_prompt(),
-        base_url=str(getattr(models, "ollama_base_url", "http://127.0.0.1:11434")),
-        model=model,
-        timeout_sec=float(getattr(models, "extraction_timeout_sec", 180.0)),
-    )
 
 
 def _platforms_in(text: str) -> set[str]:
