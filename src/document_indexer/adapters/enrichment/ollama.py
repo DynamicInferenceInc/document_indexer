@@ -13,8 +13,8 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _KEEP_ALIVE = -1
-_NUM_CTX = 16_384
-_NUM_PREDICT = 4_096
+_NUM_CTX = 65_536
+_NUM_PREDICT = 8_192
 _TEMPERATURE = 0.0
 
 
@@ -39,15 +39,17 @@ class OllamaChatCompleter:
         *,
         base_url: str,
         model: str,
-        timeout_sec: float = 180.0,
+        timeout_sec: float = 1800.0,
         num_ctx: int = _NUM_CTX,
         num_predict: int = _NUM_PREDICT,
+        think: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._timeout = timeout_sec
         self._num_ctx = num_ctx
         self._num_predict = num_predict
+        self._think = think
 
     def complete(
         self,
@@ -63,11 +65,12 @@ class OllamaChatCompleter:
         )
         logger.info(
             "Ollama chat request sent url=%s model=%s num_ctx=%s num_predict=%s "
-            "user_chars=%s timeout=%.0fs",
+            "think=%s user_chars=%s timeout=%.0fs",
             url,
             self._model,
             self._num_ctx,
             self._num_predict,
+            self._think,
             user_chars,
             self._timeout,
         )
@@ -78,11 +81,11 @@ class OllamaChatCompleter:
                 url,
                 json={
                     "model": self._model,
-                    "messages": _with_no_think(messages),
+                    "messages": [dict(message) for message in messages],
                     "stream": False,
                     "format": dict(format),
                     "keep_alive": _KEEP_ALIVE,
-                    "think": False,
+                    "think": self._think,
                     "options": {
                         "num_ctx": self._num_ctx,
                         "num_predict": self._num_predict,
@@ -113,17 +116,6 @@ class OllamaChatCompleter:
 def _flush_logs() -> None:
     for handler in logging.getLogger().handlers:
         handler.flush()
-
-
-def _with_no_think(messages: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Qwen3 native switch; pairs with top-level ``think: false``."""
-    if not messages:
-        return messages
-    patched = [dict(message) for message in messages]
-    content = patched[0].get("content", "")
-    if "/no_think" not in content:
-        patched[0]["content"] = f"/no_think\n{content}"
-    return patched
 
 
 def _strip_think(content: str) -> str:

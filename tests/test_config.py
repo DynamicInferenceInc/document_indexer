@@ -86,6 +86,36 @@ def test_nested_env(monkeypatch) -> None:
     assert settings.chunking.window_overlap == 80
 
 
+def test_resume_and_extraction_defaults_target_dgx_spark() -> None:
+    settings = IndexerSettings(_env_file=None)
+    assert settings.models.extraction_timeout_sec == 1800.0
+    assert settings.models.extraction_num_ctx == 65536
+    assert settings.models.extraction_num_predict == 8192
+    assert settings.models.extraction_think is False
+    assert settings.resume.llm_projects is True
+    assert settings.resume.llm_refine is True
+    assert settings.resume.llm_experience is True
+    assert settings.resume.residual_min_chars == 1500
+    assert settings.resume.evidence_min_ratio == 0.85
+    assert settings.resume_llm_audit is False
+
+
+def test_resume_nested_env(monkeypatch) -> None:
+    monkeypatch.setenv("RESUME__LLM_EXPERIENCE", "false")
+    monkeypatch.setenv("RESUME__RESIDUAL_MIN_CHARS", "700")
+    monkeypatch.setenv("RESUME__EVIDENCE_MIN_RATIO", "0.9")
+    monkeypatch.setenv("MODELS__EXTRACTION_NUM_CTX", "32768")
+    monkeypatch.setenv("MODELS__EXTRACTION_THINK", "true")
+    monkeypatch.setenv("RESUME_LLM_AUDIT", "1")
+    settings = IndexerSettings(_env_file=None)
+    assert settings.resume.llm_experience is False
+    assert settings.resume.residual_min_chars == 700
+    assert settings.resume.evidence_min_ratio == 0.9
+    assert settings.models.extraction_num_ctx == 32768
+    assert settings.models.extraction_think is True
+    assert settings.resume_llm_audit is True
+
+
 def test_unknown_chunking_strategy_is_rejected() -> None:
     try:
         IndexerSettings(_env_file=None, chunking={"strategy": "hybrid"})

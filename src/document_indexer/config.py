@@ -51,7 +51,11 @@ class ModelSettings(BaseModel):
     embedding_model: str = "nomic-embed-text"
     embedding_timeout_sec: float = 120.0
     extraction_model: str = ""
-    extraction_timeout_sec: float = 180.0
+    # Resume LLM on a bandwidth-bound host (DGX Spark ~10 t/s): long answers take minutes.
+    extraction_timeout_sec: float = 1800.0
+    extraction_num_ctx: int = 65_536
+    extraction_num_predict: int = 8_192
+    extraction_think: bool = False
     chunk_size: int = 1024
     picture_description_enabled: bool = True
     vlm_model: str = "qwen3-vl:8b"
@@ -70,6 +74,20 @@ class ChunkingSettings(BaseModel):
     repeat_table_header: bool = False
     window_chars: int = 1200
     window_overlap: int = 150
+
+
+class ResumeSettings(BaseModel):
+    """LLM steps of the ``resume_project`` strategy (``RESUME__*``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    llm_projects: bool = True
+    llm_refine: bool = True
+    llm_experience: bool = True
+    residual_min_chars: int = 1500
+    evidence_min_ratio: float = 0.85
+    section_max_chars: int = 120_000
+    section_overlap_chars: int = 2_000
 
 
 class LocalSourceSettings(BaseModel):
@@ -134,6 +152,7 @@ class IndexerSettings(BaseSettings):
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
     models: ModelSettings = Field(default_factory=ModelSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
+    resume: ResumeSettings = Field(default_factory=ResumeSettings)
     index_extensions: str = Field(
         default="",
         description=(
@@ -150,7 +169,15 @@ class IndexerSettings(BaseSettings):
         ),
     )
 
-    @field_validator("resume_parse_only", mode="before")
+    resume_llm_audit: bool = Field(
+        default=False,
+        description=(
+            "Docling + resume parser + LLM steps, no embeddings or Qdrant. Writes the "
+            "report and resume_chunks.jsonl for manual review. Env: RESUME_LLM_AUDIT=1."
+        ),
+    )
+
+    @field_validator("resume_parse_only", "resume_llm_audit", mode="before")
     @classmethod
     def _empty_resume_parse_only_is_false(cls, value: Any) -> Any:
         if value is None or (isinstance(value, str) and not value.strip()):

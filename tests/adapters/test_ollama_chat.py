@@ -38,18 +38,23 @@ def test_ollama_chat_sends_num_ctx(monkeypatch, caplog) -> None:
     )
 
     caplog.set_level(logging.INFO)
-    chat = OllamaChatCompleter(base_url="http://ollama:11434", model="qwen3:4b")
+    chat = OllamaChatCompleter(
+        base_url="http://ollama:11434",
+        model="qwen3:4b",
+        num_ctx=32768,
+        num_predict=2048,
+    )
     result = chat.complete(messages=[{"role": "user", "content": "hi"}], format={"type": "object"})
     assert result == {"ok": True}
     assert captured["url"] == "http://ollama:11434/api/chat"
     assert captured["json"]["think"] is False
     assert captured["json"]["options"] == {
-        "num_ctx": 16384,
-        "num_predict": 4096,
+        "num_ctx": 32768,
+        "num_predict": 2048,
         "temperature": 0.0,
     }
     assert captured["json"]["keep_alive"] == -1
-    assert captured["json"]["messages"][0]["content"].startswith("/no_think")
+    assert captured["json"]["messages"] == [{"role": "user", "content": "hi"}]
     assert "Ollama chat request sent" in caplog.text
     assert "model=qwen3:4b" in caplog.text
     assert "Ollama chat response received" in caplog.text
