@@ -100,6 +100,7 @@ hr = DocumentIndexer(ProfileSmb(
 | `SOURCE__SERVER` / `SOURCE__SHARE` | хост и имя шары | — |
 | `SOURCE__USERNAME` / `SOURCE__PASSWORD` / `SOURCE__DOMAIN` | учётная запись | — |
 | `SOURCE__SUBPATH` | каталог внутри шары | пусто (корень шары) |
+| `SOURCE__MAX_DEPTH` | сколько уровней папок копировать с шары; `1` = файлы в пути + одна вложенная папка; пусто = всё дерево | пусто |
 | `SOURCE__STAGING_PATH` | локальное зеркало | `/var/lib/document-indexer/staging` |
 | `SOURCE__PORT` | порт SMB | `445` |
 | `SOURCE__TIMEOUT_SEC` | таймаут сессии | `30` |
@@ -109,7 +110,7 @@ hr = DocumentIndexer(ProfileSmb(
 | `QDRANT__EXTRA_PAYLOAD` | JSON-константы на каждую точку | `{}` |
 | `QDRANT__PAYLOAD_INDEXES` | keyword-индексы (через запятую); пусто = индексы builder’а | builder |
 | `QDRANT__DISTANCE` | cosine / dot / euclid | `cosine` |
-| `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = `table-aware-v2` или `resume-v20` | пусто |
+| `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = `table-aware-v2`, `hybrid-v2` или `resume-v20` | пусто |
 | `MODELS__OLLAMA_BASE_URL` | embeddings, VLM, extraction LLM | `http://127.0.0.1:11434` |
 | `MODELS__EMBEDDING_MODEL` | модель эмбеддингов | `nomic-embed-text` |
 | `MODELS__EXTRACTION_MODEL` | text LLM для резюме (`/api/chat`, structured output) | пусто = только парсер, без LLM |
@@ -117,7 +118,7 @@ hr = DocumentIndexer(ProfileSmb(
 | `MODELS__EXTRACTION_NUM_CTX` / `MODELS__EXTRACTION_NUM_PREDICT` | контекст и максимум токенов ответа | `65536` / `8192` |
 | `MODELS__EXTRACTION_THINK` | режим размышлений Qwen3 (`think`) | `false` |
 | `MODELS__CHUNK_SIZE` | max tokens HybridChunker только для `table_aware` | `1024` |
-| `CHUNKING__STRATEGY` | `table_aware` или `resume_project` | `table_aware` |
+| `CHUNKING__STRATEGY` | `table_aware`, `hybrid` или `resume_project` | `table_aware` |
 | `CHUNKING__WINDOW_CHARS` / `CHUNKING__WINDOW_OVERLAP` | prose-окна, если LLM недоступна и проектов нет | `1200` / `150` |
 | `RESUME__LLM_PROJECTS` | LLM ищет проекты в неразобранном тексте | `true` |
 | `RESUME__LLM_REFINE` | LLM дозаполняет пустые поля и классифицирует направление/платформу | `true` |
@@ -143,7 +144,7 @@ hr = DocumentIndexer(ProfileSmb(
 
 **smb.** Нативный клиент `smbprotocol`, без CIFS-mount и без inotify на шаре. Модуль:
 
-1. Рекурсивно обходит share/subpath.
+1. Обходит share/subpath; при ``SOURCE__MAX_DEPTH`` не заходит глубже указанного числа папок.
 2. Скачивает файл во временный `.*.tmp` и публикует через `os.replace`.
 3. Перед публикацией повторно читает size/mtime; изменившийся файл не индексируется в этом цикле.
 4. Пишет манифест `.document_indexer_smb_manifest.json` в staging (скрытый, в индекс не попадает).
@@ -166,11 +167,13 @@ Payload точек по умолчанию не менялся: `source_path`, `
 
 Кастомные поля **добавляются** к этим ключам. Ядро всегда перезаписывает `source_path`, `chunk_index`, `file_hash`, `index_version`.
 
-## Два режима индексации
+## Три режима индексации
 
-`CHUNKING__STRATEGY` выбирает один из двух встроенных режимов. Плагины чанкера, payload и enricher снаружи не подключаются.
+`CHUNKING__STRATEGY` выбирает один из встроенных режимов.
 
-**table_aware** (по умолчанию). Docling HybridChunker + постобработка таблиц: одна таблица — один чанк. Payload: `text`, `headings`, `chunk_type`, поля таблиц. Версия `table-aware-v2`.
+**table_aware** (по умолчанию). Docling HybridChunker + постобработка таблиц: одна таблица — один чанк. Payload: `text`, `headings`, `chunk_type`, поля таблиц, `direction` (имя родительской папки файла). Версия `table-aware-v2`.
+
+**hybrid**. Как режет официальный Docling `HybridChunker` (его токенизатор и merge), без table-aware постобработки. Картинки на convert-этапе идут в VLM (`MODELS__PICTURE_DESCRIPTION_ENABLED=true`), описания попадают в текст чанка. Payload как у table_aware (`text`, `headings`, `chunk_type=prose`) плюс `direction` — имя папки, в которой лежит файл (`Проекты/Бухгалтерия/акт.docx` → `Бухгалтерия`). Версия `hybrid-v2`.
 
 **resume_project**. Один проект — один чанк (`chunk_type=project`). На каждой точке лежат `candidate_name` и `candidate_position` из шапки (ФИО может быть без подписи). Строки-заголовки таблицы и неполные копии того же проекта отбрасываются. Пример CV: `resume/sample.md`.
 
