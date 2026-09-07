@@ -36,13 +36,22 @@ class HybridDocumentChunker:
                 )
             )
         logger.info(
-            "Hybrid chunker path=%s raw=%s stored=%s elapsed=%.2fs",
+            "Hybrid chunker path=%s raw=%s stored=%s tokenizer_max_tokens=%s elapsed=%.2fs",
             path_name,
             raw_count,
             len(chunks),
+            _tokenizer_max_tokens(self._chunker),
             time.perf_counter() - started,
         )
         return chunks
+
+
+def _tokenizer_max_tokens(chunker: Any) -> int | str:
+    tokenizer = getattr(chunker, "tokenizer", None)
+    getter = getattr(tokenizer, "get_max_tokens", None)
+    if callable(getter):
+        return getter()
+    return getattr(tokenizer, "max_tokens", "?")
 
 
 def _headings_from_chunk(chunk: Any) -> tuple[str, ...]:
