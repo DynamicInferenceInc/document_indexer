@@ -10,7 +10,7 @@ import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from document_indexer.config import SmbSourceSettings
 from document_indexer.domain.changes import FsChange
@@ -96,24 +96,89 @@ class SmbprotocolRemote:
         listed: dict[str, RemoteFileMeta] = {}
         kwargs = self._session_kwargs()
         try:
-            for dirpath, _dirnames, filenames in smbclient.walk(self._root, **kwargs):
-                for name in filenames:
-                    if name.startswith("."):
-                        continue
-                    full = _join_unc(dirpath, name)
-                    relative = _relative_posix(full, self._root)
-                    if relative is None:
-                        continue
-                    stat_result = smbclient.stat(full, **kwargs)
-                    listed[relative] = RemoteFileMeta(
-                        size=int(stat_result.st_size),
-                        mtime=float(stat_result.st_mtime),
-                    )
+            if self._settings.max_depth is None:
+                self._walk_all(smbclient, kwargs, listed)
+            else:
+                self._walk_limited(
+                    smbclient,
+                    kwargs,
+                    listed,
+                    unc=self._root,
+                    relative="",
+                    remaining=self._settings.max_depth,
+                )
         except SmbListingError:
             raise
         except Exception as exc:
             raise SmbListingError(f"SMB listing failed for {self._root}: {exc}") from exc
+        logger.info(
+            "SMB listing root=%s files=%s max_depth=%s",
+            self._root,
+            len(listed),
+            self._settings.max_depth,
+        )
         return listed
+
+    def _walk_all(self, smbclient: Any, kwargs: dict[str, object], listed: dict[str, RemoteFileMeta]) -> None:
+        for dirpath, _dirnames, filenames in smbclient.walk(self._root, **kwargs):
+            for name in filenames:
+                if name.startswith("."):
+                    continue
+                full = _join_unc(dirpath, name)
+                relative = _relative_posix(full, self._root)
+                if relative is None:
+                    continue
+                self._record_file(smbclient, kwargs, listed, full, relative)
+
+    def _walk_limited(
+        self,
+        smbclient: Any,
+        kwargs: dict[str, object],
+        listed: dict[str, RemoteFileMeta],
+        *,
+        unc: str,
+        relative: str,
+        remaining: int,
+    ) -> None:
+        try:
+            names = list(smbclient.listdir(unc, **kwargs))
+        except Exception as exc:
+            raise SmbListingError(f"SMB listdir failed for {unc}: {exc}") from exc
+        for name in names:
+            if name in {".", ".."} or name.startswith("."):
+                continue
+            full = _join_unc(unc, name)
+            child_rel = name if not relative else f"{relative}/{name}"
+            try:
+                is_dir = bool(smbclient.path.isdir(full, **kwargs))
+            except Exception as exc:
+                raise SmbListingError(f"SMB stat failed for {child_rel}: {exc}") from exc
+            if is_dir:
+                if remaining > 0:
+                    self._walk_limited(
+                        smbclient,
+                        kwargs,
+                        listed,
+                        unc=full,
+                        relative=child_rel,
+                        remaining=remaining - 1,
+                    )
+                continue
+            self._record_file(smbclient, kwargs, listed, full, child_rel)
+
+    def _record_file(
+        self,
+        smbclient: Any,
+        kwargs: dict[str, object],
+        listed: dict[str, RemoteFileMeta],
+        full: str,
+        relative: str,
+    ) -> None:
+        stat_result = smbclient.stat(full, **kwargs)
+        listed[relative] = RemoteFileMeta(
+            size=int(stat_result.st_size),
+            mtime=float(stat_result.st_mtime),
+        )
 
     def stat(self, relative: str) -> RemoteFileMeta:
         self._ensure_session()
@@ -181,10 +246,11 @@ class SmbStagingSource:
         )
         self._thread.start()
         logger.info(
-            "SMB poller started server=%s share=%s subpath=%s staging=%s interval=%ss",
+            "SMB poller started server=%s share=%s subpath=%s max_depth=%s staging=%s interval=%ss",
             self._settings.server,
             self._settings.share,
             self._settings.subpath or "/",
+            self._settings.max_depth,
             self._settings.staging_path,
             self._settings.poll_interval_sec,
         )
@@ -203,6 +269,8 @@ class SmbStagingSource:
         staging = self.local_root()
 
         for relative, meta in remote_files.items():
+            if not relative_within_depth(relative, self._settings.max_depth):
+                continue
             if not self._is_indexable(relative):
                 continue
             current = self._mirrored.get(relative)
@@ -337,6 +405,20 @@ class SmbStagingSource:
             except OSError:
                 return
             current = current.parent
+
+
+def relative_within_depth(relative: str, max_depth: int | None) -> bool:
+    """True if ``relative`` has at most ``max_depth`` directory components.
+
+    ``Проекты/Alpha/file.docx`` is depth 1. ``None`` accepts every path.
+    """
+    if max_depth is None:
+        return True
+    normalized = relative.replace("\\", "/").strip("/")
+    if not normalized:
+        return False
+    dir_count = normalized.count("/")
+    return dir_count <= max_depth
 
 
 def _unc(server: str, share: str, *parts: str) -> str:

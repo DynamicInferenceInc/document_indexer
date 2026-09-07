@@ -65,11 +65,11 @@ class ModelSettings(BaseModel):
 
 
 class ChunkingSettings(BaseModel):
-    """``table_aware`` documents or ``resume_project`` CVs."""
+    """``table_aware``, vanilla Docling ``hybrid``, or ``resume_project`` CVs."""
 
     model_config = ConfigDict(extra="forbid")
 
-    strategy: Literal["table_aware", "resume_project"] = "table_aware"
+    strategy: Literal["table_aware", "hybrid", "resume_project"] = "table_aware"
     merge_peers: bool = True
     repeat_table_header: bool = False
     window_chars: int = 1200
@@ -113,10 +113,32 @@ class SmbSourceSettings(BaseModel):
     staging_path: str = "/var/lib/document-indexer/staging"
     domain: str | None = None
     subpath: str = ""
+    max_depth: int | None = Field(
+        default=None,
+        description=(
+            "How many folder levels below SOURCE__SUBPATH to copy. "
+            "1 = files in the path plus one nested folder (Проекты/Alpha/file.docx). "
+            "Empty = walk the whole tree."
+        ),
+    )
     port: int = 445
     timeout_sec: float = 30.0
     poll_interval_sec: float = 15.0
     max_backoff_sec: float = 60.0
+
+    @field_validator("max_depth", mode="before")
+    @classmethod
+    def _empty_max_depth_is_none(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
+    @field_validator("max_depth")
+    @classmethod
+    def _max_depth_non_negative(cls, value: int | None) -> int | None:
+        if value is not None and value < 0:
+            raise ValueError("max_depth must be >= 0")
+        return value
 
 
 class IndexerSettings(BaseSettings):

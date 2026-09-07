@@ -116,9 +116,36 @@ def test_resume_nested_env(monkeypatch) -> None:
     assert settings.resume_llm_audit is True
 
 
+def test_smb_max_depth_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("SOURCE__KIND", "smb")
+    monkeypatch.setenv("SOURCE__SERVER", "pers.local")
+    monkeypatch.setenv("SOURCE__SHARE", "common")
+    monkeypatch.setenv("SOURCE__USERNAME", "svc")
+    monkeypatch.setenv("SOURCE__PASSWORD", "secret")
+    monkeypatch.setenv("SOURCE__SUBPATH", "Проекты")
+    monkeypatch.setenv("SOURCE__MAX_DEPTH", "1")
+    monkeypatch.setenv("CHUNKING__STRATEGY", "hybrid")
+    settings = IndexerSettings(_env_file=None)
+    assert settings.source.kind == "smb"
+    assert settings.source.max_depth == 1
+    assert settings.source.subpath == "Проекты"
+    assert settings.chunking.strategy == "hybrid"
+
+
+def test_smb_empty_max_depth_is_unlimited(monkeypatch) -> None:
+    monkeypatch.setenv("SOURCE__KIND", "smb")
+    monkeypatch.setenv("SOURCE__SERVER", "pers.local")
+    monkeypatch.setenv("SOURCE__SHARE", "common")
+    monkeypatch.setenv("SOURCE__USERNAME", "svc")
+    monkeypatch.setenv("SOURCE__PASSWORD", "secret")
+    monkeypatch.setenv("SOURCE__MAX_DEPTH", "")
+    settings = IndexerSettings(_env_file=None)
+    assert settings.source.max_depth is None
+
+
 def test_unknown_chunking_strategy_is_rejected() -> None:
     try:
-        IndexerSettings(_env_file=None, chunking={"strategy": "hybrid"})
+        IndexerSettings(_env_file=None, chunking={"strategy": "sliding_window"})
     except ValidationError as exc:
         assert "strategy" in str(exc)
     else:

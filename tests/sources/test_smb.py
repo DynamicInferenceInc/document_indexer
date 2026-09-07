@@ -14,6 +14,8 @@ from document_indexer.sources.smb import (
     RemoteFileMeta,
     SmbListingError,
     SmbStagingSource,
+    SmbprotocolRemote,
+    relative_within_depth,
 )
 
 
@@ -43,7 +45,7 @@ class FakeRemote:
         dest.write_bytes(self.files[relative][0])
 
 
-def _source(tmp_path: Path, remote: FakeRemote) -> SmbStagingSource:
+def _source(tmp_path: Path, remote: FakeRemote, *, max_depth: int | None = None) -> SmbStagingSource:
     settings = SmbSourceSettings(
         server="fileserver",
         share="docs",
@@ -52,6 +54,7 @@ def _source(tmp_path: Path, remote: FakeRemote) -> SmbStagingSource:
         staging_path=str(tmp_path / "staging"),
         poll_interval_sec=0.05,
         max_backoff_sec=0.4,
+        max_depth=max_depth,
     )
     return SmbStagingSource(
         settings,
@@ -181,6 +184,91 @@ def test_smb_skips_unsupported_and_hidden_files(tmp_path: Path) -> None:
     assert "ok.md" in names
     assert ".hidden.md" not in names
     assert "skip.bin" not in names
+
+
+def test_relative_within_depth() -> None:
+    assert relative_within_depth("file.docx", None) is True
+    assert relative_within_depth("file.docx", 1) is True
+    assert relative_within_depth("Alpha/file.docx", 1) is True
+    assert relative_within_depth("Alpha/docs/file.docx", 1) is False
+    assert relative_within_depth("Alpha/docs/file.docx", 2) is True
+    assert relative_within_depth("Alpha/docs/file.docx", 0) is False
+
+
+class _FakeSmbPath:
+    def __init__(self, dirs: set[str]) -> None:
+        self._dirs = dirs
+
+    def isdir(self, full: str, **_kwargs: object) -> bool:
+        return full.replace("/", "\\") in self._dirs
+
+
+class _FakeSmbClient:
+    """smbclient-shaped tree for ``SmbprotocolRemote._walk_limited``."""
+
+    def __init__(self, *, dirs: dict[str, list[str]], files: dict[str, RemoteFileMeta]) -> None:
+        self.dirs = dirs
+        self.files = files
+        self.listdir_calls: list[str] = []
+        self.path = _FakeSmbPath(set(dirs))
+
+    def listdir(self, unc: str, **_kwargs: object) -> list[str]:
+        key = unc.replace("/", "\\")
+        self.listdir_calls.append(key)
+        return list(self.dirs[key])
+
+    def stat(self, full: str, **_kwargs: object) -> object:
+        key = full.replace("/", "\\")
+        meta = self.files[key]
+        return type("Stat", (), {"st_size": meta.size, "st_mtime": meta.mtime})()
+
+
+def test_smbprotocol_walk_limited_does_not_enter_second_folder_level() -> None:
+    root = r"\\pers.local\common\Проекты"
+    alpha = root + r"\Alpha"
+    beta = root + r"\Beta"
+    deep = alpha + r"\docs"
+    client = _FakeSmbClient(
+        dirs={
+            root: ["file.docx", "Alpha", "Beta"],
+            alpha: ["spec.pdf", "docs"],
+            beta: ["note.txt"],
+            deep: ["deep.pdf"],
+        },
+        files={
+            root + r"\file.docx": RemoteFileMeta(size=1, mtime=1.0),
+            alpha + r"\spec.pdf": RemoteFileMeta(size=2, mtime=1.0),
+            beta + r"\note.txt": RemoteFileMeta(size=3, mtime=1.0),
+            deep + r"\deep.pdf": RemoteFileMeta(size=4, mtime=1.0),
+        },
+    )
+    remote = SmbprotocolRemote.__new__(SmbprotocolRemote)
+    listed: dict[str, RemoteFileMeta] = {}
+    remote._walk_limited(  # noqa: SLF001
+        client,
+        {},
+        listed,
+        unc=root,
+        relative="",
+        remaining=1,
+    )
+    assert set(listed) == {"file.docx", "Alpha/spec.pdf", "Beta/note.txt"}
+    assert deep not in client.listdir_calls
+
+
+def test_smb_max_depth_one_copies_only_one_folder_level(tmp_path: Path) -> None:
+    remote = FakeRemote()
+    remote.put("root.md", b"root")
+    remote.put("Alpha/spec.pdf", b"alpha")
+    remote.put("Alpha/docs/deep.md", b"too-deep")
+    remote.put("Beta/note.txt", b"beta")
+    source = _source(tmp_path, remote, max_depth=1)
+    root = source.prepare()
+    assert (root / "root.md").read_bytes() == b"root"
+    assert (root / "Alpha" / "spec.pdf").read_bytes() == b"alpha"
+    assert (root / "Beta" / "note.txt").read_bytes() == b"beta"
+    assert not (root / "Alpha" / "docs" / "deep.md").exists()
+    assert "Alpha/docs/deep.md" not in remote.downloads
 
 
 @pytest.mark.smb_integration
