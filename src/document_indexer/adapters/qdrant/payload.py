@@ -21,6 +21,7 @@ DEFAULT_PAYLOAD_INDEXES = (
     "file_hash",
     "chunk_type",
     "table_ref",
+    "direction",
 )
 
 
@@ -65,11 +66,30 @@ class DefaultPayloadBuilder:
             payload["table_ref"] = chunk.table_ref
         if chunk.row_count:
             payload["row_count"] = chunk.row_count
+        direction = direction_from_source_path(record.source_path)
+        if direction:
+            payload["direction"] = direction
         payload.update(record.document_fields)
         return payload
 
     def payload_indexes(self) -> Sequence[str]:
         return DEFAULT_PAYLOAD_INDEXES
+
+
+def direction_from_source_path(source_path: str) -> str:
+    """Folder that contains the file, relative to the indexed root.
+
+    ``Бухгалтерия/акт.docx`` → ``Бухгалтерия``. A file sitting in the root
+    (``акт.docx``) has no folder name.
+    """
+    normalized = source_path.replace("\\", "/").strip("/")
+    if not normalized:
+        return ""
+    parent = Path(normalized).parent
+    name = parent.name.strip()
+    if not name or name == ".":
+        return ""
+    return name
 
 
 def merge_payload(

@@ -70,6 +70,28 @@ def test_qdrant_indexer_indexes_reader_chunks(tmp_path: Path) -> None:
     assert len(points[0].payload["file_hash"]) == 64
     assert points[0].payload["index_version"] == "table-aware-v2"
     assert points[0].payload["chunk_type"] == "prose"
+    assert "direction" not in points[0].payload
+
+
+def test_qdrant_indexer_sets_direction_from_parent_folder(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    folder = docs / "Бухгалтерия"
+    folder.mkdir(parents=True)
+    (folder / "акт.md").write_text("учёт основных средств\n" * 3, encoding="utf-8")
+
+    client = _mock_client(exists=False)
+    indexer = QdrantIndexer(
+        qdrant_url="http://127.0.0.1:6333",
+        collection="docs",
+        embedder=FakeEmbedder(),
+        document_reader=FakeReader(),
+    )
+    indexer._client = client
+    indexer.index(str(docs))
+
+    points = client.upsert.call_args.kwargs["points"]
+    assert points[0].payload["source_path"] == "Бухгалтерия/акт.md"
+    assert points[0].payload["direction"] == "Бухгалтерия"
 
 
 def test_collect_resume_report_groups_by_source() -> None:
