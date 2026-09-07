@@ -22,6 +22,7 @@ from document_indexer.adapters.qdrant_indexer import QdrantIndexer
 from document_indexer.config import IndexerSettings, LocalSourceSettings, SmbSourceSettings
 from document_indexer.domain.changes import FsChange
 from document_indexer.domain.documents import resolve_index_extensions
+from document_indexer.hybrid.chunker import HYBRID_INDEX_VERSION, HybridDocumentChunker
 from document_indexer.infra.embeddings import OllamaEmbedder
 from document_indexer.infra.logging_config import configure_logging
 from document_indexer.ports import Indexer
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 class DocumentIndexer:
     """Index documents from one configured source into one Qdrant collection.
 
-    One instance is one profile: ``table_aware`` documents or resumes.
+    One instance is one profile: ``table_aware``, ``hybrid``, or resumes.
     Create several instances (or processes) for independent sources or collections.
     """
 
@@ -258,6 +259,8 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
         or getattr(payload_builder, "index_version", "")
         or DEFAULT_INDEX_VERSION
     )
+    if not settings.qdrant.index_version and chunking.strategy == "hybrid":
+        index_version = HYBRID_INDEX_VERSION
     return QdrantIndexer(
         qdrant_url=settings.qdrant.url,
         collection=settings.qdrant.collection,
@@ -287,6 +290,12 @@ def _build_profile(
             ResumePayloadBuilder(),
             None,
         )
+
+    if chunking.strategy == "hybrid":
+        # Docling's own tokenizer and split; picture serializer so VLM captions land in text.
+        hybrid = HybridChunker(serializer_provider=MarkdownChunkSerializerProvider())
+        logger.info("HybridChunker using Docling defaults index_version=%s", HYBRID_INDEX_VERSION)
+        return HybridDocumentChunker(chunker=hybrid), hybrid, None, DefaultPayloadBuilder(), None
 
     tokenizer = tokenizer_with_max_tokens(settings.models.chunk_size)
     hybrid = HybridChunker(

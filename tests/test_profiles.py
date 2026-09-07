@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from document_indexer.adapters.qdrant.payload import DefaultPayloadBuilder
 from document_indexer.config import ChunkingSettings, IndexerSettings, ModelSettings, QdrantSettings
 from document_indexer.indexer import build_indexer
+from document_indexer.hybrid.chunker import HYBRID_INDEX_VERSION, HybridDocumentChunker
 from document_indexer.resume.chunker import ResumeProjectChunker
 from document_indexer.resume.payload import INDEX_VERSION, ResumePayloadBuilder
 from document_indexer.table_aware.chunker import TableAwareDocumentChunker
@@ -35,6 +36,21 @@ def test_build_indexer_table_aware_default(monkeypatch) -> None:
     assert captured["enricher"] is None
     assert captured["index_version"] == "table-aware-v2"
     assert isinstance(captured["document_reader"]._document_chunker, TableAwareDocumentChunker)
+
+
+def test_build_indexer_hybrid_wires_vanilla_chunker(monkeypatch) -> None:
+    captured = _capture_indexer(monkeypatch)
+    settings = IndexerSettings(
+        _env_file=None,
+        chunking=ChunkingSettings(strategy="hybrid"),
+        models=ModelSettings(picture_description_enabled=True),
+    )
+    build_indexer(settings)
+    assert isinstance(captured["payload_builder"], DefaultPayloadBuilder)
+    assert captured["enricher"] is None
+    assert captured["index_version"] == HYBRID_INDEX_VERSION
+    assert isinstance(captured["document_reader"]._document_chunker, HybridDocumentChunker)
+    assert captured["document_reader"]._picture.enabled is True
 
 
 def test_build_indexer_resume_wires_llm_chunker_and_payload(monkeypatch) -> None:
