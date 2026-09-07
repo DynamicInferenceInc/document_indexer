@@ -110,14 +110,14 @@ hr = DocumentIndexer(ProfileSmb(
 | `QDRANT__EXTRA_PAYLOAD` | JSON-константы на каждую точку | `{}` |
 | `QDRANT__PAYLOAD_INDEXES` | keyword-индексы (через запятую); пусто = индексы builder’а | builder |
 | `QDRANT__DISTANCE` | cosine / dot / euclid | `cosine` |
-| `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = `table-aware-v2`, `hybrid-v2` или `resume-v20` | пусто |
+| `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = `table-aware-v2`, `hybrid-v3` или `resume-v20` | пусто |
 | `MODELS__OLLAMA_BASE_URL` | embeddings, VLM, extraction LLM | `http://127.0.0.1:11434` |
 | `MODELS__EMBEDDING_MODEL` | модель эмбеддингов | `nomic-embed-text` |
 | `MODELS__EXTRACTION_MODEL` | text LLM для резюме (`/api/chat`, structured output) | пусто = только парсер, без LLM |
 | `MODELS__EXTRACTION_TIMEOUT_SEC` | таймаут одного вызова LLM | `1800` |
 | `MODELS__EXTRACTION_NUM_CTX` / `MODELS__EXTRACTION_NUM_PREDICT` | контекст и максимум токенов ответа | `65536` / `8192` |
 | `MODELS__EXTRACTION_THINK` | режим размышлений Qwen3 (`think`) | `false` |
-| `MODELS__CHUNK_SIZE` | max tokens HybridChunker только для `table_aware` | `1024` |
+| `MODELS__CHUNK_SIZE` | max tokens HybridChunker (`table_aware` и `hybrid`) | `1024` |
 | `CHUNKING__STRATEGY` | `table_aware`, `hybrid` или `resume_project` | `table_aware` |
 | `CHUNKING__WINDOW_CHARS` / `CHUNKING__WINDOW_OVERLAP` | prose-окна, если LLM недоступна и проектов нет | `1200` / `150` |
 | `RESUME__LLM_PROJECTS` | LLM ищет проекты в неразобранном тексте | `true` |
@@ -173,7 +173,7 @@ Payload точек по умолчанию не менялся: `source_path`, `
 
 **table_aware** (по умолчанию). Docling HybridChunker + постобработка таблиц: одна таблица — один чанк. Payload: `text`, `headings`, `chunk_type`, поля таблиц, `direction` (имя родительской папки файла). Версия `table-aware-v2`.
 
-**hybrid**. Как режет официальный Docling `HybridChunker` (его токенизатор и merge), без table-aware постобработки. Картинки на convert-этапе идут в VLM (`MODELS__PICTURE_DESCRIPTION_ENABLED=true`), описания попадают в текст чанка. Payload как у table_aware (`text`, `headings`, `chunk_type=prose`) плюс `direction` — имя папки, в которой лежит файл (`Проекты/Бухгалтерия/акт.docx` → `Бухгалтерия`). Версия `hybrid-v2`.
+**hybrid**. Как режет официальный Docling `HybridChunker`, без table-aware постобработки. Лимит токенов — `MODELS__CHUNK_SIZE` (по умолчанию 1024; дефолт Docling 256 слишком мал для длинных заголовков). Картинки на convert-этапе идут в VLM (`MODELS__PICTURE_DESCRIPTION_ENABLED=true`), описания попадают в текст чанка. Payload как у table_aware (`text`, `headings`, `chunk_type=prose`) плюс `direction` — имя папки, в которой лежит файл (`Проекты/Бухгалтерия/акт.docx` → `Бухгалтерия`). Версия `hybrid-v3`.
 
 **resume_project**. Один проект — один чанк (`chunk_type=project`). На каждой точке лежат `candidate_name` и `candidate_position` из шапки (ФИО может быть без подписи). Строки-заголовки таблицы и неполные копии того же проекта отбрасываются. Пример CV: `resume/sample.md`.
 

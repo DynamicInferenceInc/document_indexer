@@ -292,10 +292,19 @@ def _build_profile(
         )
 
     if chunking.strategy == "hybrid":
-        # Docling's own tokenizer and split; picture serializer so VLM captions land in text.
-        hybrid = HybridChunker(serializer_provider=MarkdownChunkSerializerProvider())
-        logger.info("HybridChunker using Docling defaults index_version=%s", HYBRID_INDEX_VERSION)
-        return HybridDocumentChunker(chunker=hybrid), hybrid, None, DefaultPayloadBuilder(), None
+        # Same HybridChunker split as table_aware, without table post-processing.
+        # Docling's default max_tokens=256 is too small for heading prefixes in real docs.
+        tokenizer = tokenizer_with_max_tokens(settings.models.chunk_size)
+        hybrid = HybridChunker(
+            tokenizer=tokenizer,
+            serializer_provider=MarkdownChunkSerializerProvider(),
+        )
+        logger.info(
+            "HybridChunker max_tokens=%s index_version=%s",
+            settings.models.chunk_size,
+            HYBRID_INDEX_VERSION,
+        )
+        return HybridDocumentChunker(chunker=hybrid), hybrid, tokenizer, DefaultPayloadBuilder(), None
 
     tokenizer = tokenizer_with_max_tokens(settings.models.chunk_size)
     hybrid = HybridChunker(

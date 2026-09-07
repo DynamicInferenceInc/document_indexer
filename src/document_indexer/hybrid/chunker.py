@@ -10,7 +10,7 @@ from document_indexer.domain.models import DocumentChunk
 
 logger = logging.getLogger(__name__)
 
-HYBRID_INDEX_VERSION = "hybrid-v2"
+HYBRID_INDEX_VERSION = "hybrid-v3"
 
 
 class HybridDocumentChunker:

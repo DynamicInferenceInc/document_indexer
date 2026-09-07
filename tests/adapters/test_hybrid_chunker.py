@@ -46,8 +46,9 @@ def test_hybrid_chunker_skips_empty_text() -> None:
     assert chunks == [DocumentChunk(text="kept", headings=("H",), chunk_type="prose")]
 
 
-def test_build_indexer_hybrid_uses_docling_defaults(monkeypatch) -> None:
+def test_build_indexer_hybrid_uses_chunk_size_tokenizer(monkeypatch) -> None:
     captured: dict = {}
+    tokenizer = MagicMock(name="hybrid-tokenizer")
 
     class FakeIndexer:
         def __init__(self, **kwargs) -> None:
@@ -58,8 +59,8 @@ def test_build_indexer_hybrid_uses_docling_defaults(monkeypatch) -> None:
     monkeypatch.setattr("document_indexer.indexer.OllamaEmbedder", MagicMock)
     monkeypatch.setattr(
         "document_indexer.indexer.tokenizer_with_max_tokens",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("hybrid must use HybridChunker tokenizer defaults")
+        lambda max_tokens, **_kwargs: tokenizer if max_tokens == 1024 else (_ for _ in ()).throw(
+            AssertionError(f"unexpected max_tokens={max_tokens}")
         ),
     )
     hybrid_cls = MagicMock(return_value=MagicMock())
@@ -68,14 +69,18 @@ def test_build_indexer_hybrid_uses_docling_defaults(monkeypatch) -> None:
     settings = IndexerSettings(
         _env_file=None,
         chunking=ChunkingSettings(strategy="hybrid"),
-        models={"picture_description_enabled": True, "vlm_model": "qwen3-vl:8b"},
+        models={
+            "chunk_size": 1024,
+            "picture_description_enabled": True,
+            "vlm_model": "qwen3-vl:8b",
+        },
     )
     build_indexer(settings)
     assert captured["index_version"] == HYBRID_INDEX_VERSION
     assert isinstance(captured["document_reader"]._document_chunker, HybridDocumentChunker)
     hybrid_cls.assert_called_once()
     kwargs = hybrid_cls.call_args.kwargs
-    assert "tokenizer" not in kwargs
+    assert kwargs["tokenizer"] is tokenizer
     assert "serializer_provider" in kwargs
     assert captured["document_reader"]._picture.enabled is True
     assert captured["document_reader"]._picture.model == "qwen3-vl:8b"
@@ -91,6 +96,7 @@ def test_build_indexer_hybrid_keeps_explicit_index_version(monkeypatch) -> None:
     monkeypatch.setattr("document_indexer.indexer.QdrantIndexer", FakeIndexer)
     monkeypatch.setattr("document_indexer.indexer.DocumentConverter", MagicMock)
     monkeypatch.setattr("document_indexer.indexer.OllamaEmbedder", MagicMock)
+    monkeypatch.setattr("document_indexer.indexer.tokenizer_with_max_tokens", lambda *_a, **_k: MagicMock())
     monkeypatch.setattr("document_indexer.indexer.HybridChunker", MagicMock)
 
     settings = IndexerSettings(
