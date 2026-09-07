@@ -273,6 +273,7 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
         payload_indexes=settings.qdrant.payload_indexes,
         distance=settings.qdrant.distance,
         index_version=index_version,
+        timeout_sec=settings.qdrant.timeout_sec,
     )
 
 

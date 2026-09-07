@@ -18,6 +18,7 @@ class QdrantSettings(BaseModel):
 
     url: str = "http://127.0.0.1:6333"
     collection: str = "docs"
+    timeout_sec: float = 120.0
     extra_payload: dict[str, Any] = Field(default_factory=dict)
     payload_indexes: list[str] | None = None
     distance: Literal["cosine", "dot", "euclid"] = "cosine"

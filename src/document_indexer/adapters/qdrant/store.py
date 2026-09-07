@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterator, Sequence
 from typing import Literal
 
@@ -14,6 +15,9 @@ logger = logging.getLogger(__name__)
 _SCROLL_LIMIT = 100
 # Qdrant rejects HTTP JSON larger than 32MiB. Leave headroom for the envelope.
 _MAX_UPSERT_JSON_BYTES = 24 * 1024 * 1024
+_MAX_UPSERT_POINTS = 64
+_UPSERT_ATTEMPTS = 4
+_DEFAULT_TIMEOUT_SEC = 120.0
 _DISTANCE = {
     "cosine": qmodels.Distance.COSINE,
     "dot": qmodels.Distance.DOT,
@@ -32,11 +36,18 @@ class QdrantStore:
         distance: Literal["cosine", "dot", "euclid"] = "cosine",
         client: QdrantClient | None = None,
         max_upsert_json_bytes: int = _MAX_UPSERT_JSON_BYTES,
+        max_upsert_points: int = _MAX_UPSERT_POINTS,
+        timeout_sec: float = _DEFAULT_TIMEOUT_SEC,
     ) -> None:
         self.collection = collection
         self.distance = distance
-        self.client = client or QdrantClient(url=url, check_compatibility=False)
+        self.client = client or QdrantClient(
+            url=url,
+            timeout=timeout_sec,
+            check_compatibility=False,
+        )
         self._max_upsert_json_bytes = max_upsert_json_bytes
+        self._max_upsert_points = max_upsert_points
 
     def collection_exists(self) -> bool:
         return self.client.collection_exists(self.collection)
@@ -186,28 +197,72 @@ class QdrantStore:
         items = list(points)
         if not items:
             return
-        batches = list(_iter_upsert_batches(items, self._max_upsert_json_bytes))
+        batches = list(
+            _iter_upsert_batches(
+                items,
+                self._max_upsert_json_bytes,
+                max_points=self._max_upsert_points,
+            )
+        )
         if len(batches) > 1:
             logger.info(
-                "Qdrant upsert split collection=%s points=%s batches=%s limit_bytes=%s",
+                "Qdrant upsert split collection=%s points=%s batches=%s "
+                "limit_bytes=%s limit_points=%s",
                 self.collection,
                 len(items),
                 len(batches),
                 self._max_upsert_json_bytes,
+                self._max_upsert_points,
             )
-        for batch in batches:
-            self.client.upsert(collection_name=self.collection, points=batch)
+        for index, batch in enumerate(batches, start=1):
+            self._upsert_batch(batch, batch_index=index, batch_count=len(batches))
+
+    def _upsert_batch(
+        self,
+        batch: Sequence[qmodels.PointStruct],
+        *,
+        batch_index: int,
+        batch_count: int,
+    ) -> None:
+        last_error: Exception | None = None
+        for attempt in range(1, _UPSERT_ATTEMPTS + 1):
+            try:
+                self.client.upsert(collection_name=self.collection, points=list(batch))
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt >= _UPSERT_ATTEMPTS or not _is_retryable_upsert(exc):
+                    raise
+                delay = min(8.0, 2.0 ** (attempt - 1))
+                logger.warning(
+                    "Qdrant upsert timed out collection=%s batch=%s/%s points=%s "
+                    "attempt=%s/%s retry_in=%.1fs: %s",
+                    self.collection,
+                    batch_index,
+                    batch_count,
+                    len(batch),
+                    attempt,
+                    _UPSERT_ATTEMPTS,
+                    delay,
+                    exc,
+                )
+                time.sleep(delay)
+        if last_error is not None:
+            raise last_error
 
 
 def _iter_upsert_batches(
     points: Sequence[qmodels.PointStruct],
     max_bytes: int,
+    *,
+    max_points: int = _MAX_UPSERT_POINTS,
 ) -> Iterator[list[qmodels.PointStruct]]:
     batch: list[qmodels.PointStruct] = []
     used = 0
+    limit_points = max(1, max_points)
     for point in points:
         size = _encoded_point_size(point)
-        if batch and used + size > max_bytes:
+        if batch and (used + size > max_bytes or len(batch) >= limit_points):
             yield batch
             batch = []
             used = 0
@@ -223,6 +278,14 @@ def _iter_upsert_batches(
         used += size
     if batch:
         yield batch
+
+
+def _is_retryable_upsert(exc: BaseException) -> bool:
+    name = type(exc).__name__
+    if "Timeout" in name or name == "ResponseHandlingException":
+        return True
+    text = str(exc).lower()
+    return "timed out" in text or "timeout" in text
 
 
 def _encoded_point_size(point: qmodels.PointStruct) -> int:

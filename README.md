@@ -107,6 +107,7 @@ hr = DocumentIndexer(ProfileSmb(
 | `SOURCE__POLL_INTERVAL_SEC` | период опроса | `15` |
 | `SOURCE__MAX_BACKOFF_SEC` | потолок backoff при сбоях | `60` |
 | `QDRANT__URL` / `QDRANT__COLLECTION` | куда писать векторы | `http://127.0.0.1:6333` / `docs` |
+| `QDRANT__TIMEOUT_SEC` | HTTP timeout upsert/scroll | `120` |
 | `QDRANT__EXTRA_PAYLOAD` | JSON-константы на каждую точку | `{}` |
 | `QDRANT__PAYLOAD_INDEXES` | keyword-индексы (через запятую); пусто = индексы builder’а | builder |
 | `QDRANT__DISTANCE` | cosine / dot / euclid | `cosine` |

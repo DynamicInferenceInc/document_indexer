@@ -52,11 +52,13 @@ class QdrantIndexer:
         payload_indexes: Sequence[str] | None = None,
         distance: Literal["cosine", "dot", "euclid"] = "cosine",
         index_version: str = DEFAULT_INDEX_VERSION,
+        timeout_sec: float = 120.0,
     ) -> None:
         self._store = QdrantStore(
             url=qdrant_url,
             collection=collection,
             distance=distance,
+            timeout_sec=timeout_sec,
         )
         self._collection = collection
         self._embedder = embedder

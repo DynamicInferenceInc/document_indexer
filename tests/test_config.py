@@ -23,6 +23,7 @@ def test_default_local_profile_matches_original_models() -> None:
     assert settings.source.debounce_seconds == 1.0
     assert settings.qdrant.url == "http://127.0.0.1:6333"
     assert settings.qdrant.collection == "docs"
+    assert settings.qdrant.timeout_sec == 120.0
     assert settings.models.embedding_model == "nomic-embed-text"
     assert settings.models.extraction_model == ""
     assert settings.models.chunk_size == 1024
