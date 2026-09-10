@@ -277,6 +277,7 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
         distance=settings.qdrant.distance,
         index_version=index_version,
         timeout_sec=settings.qdrant.timeout_sec,
+        prune_missing=settings.qdrant.prune_missing,
     )
 
 

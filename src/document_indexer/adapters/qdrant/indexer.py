@@ -53,6 +53,7 @@ class QdrantIndexer:
         distance: Literal["cosine", "dot", "euclid"] = "cosine",
         index_version: str = DEFAULT_INDEX_VERSION,
         timeout_sec: float = 120.0,
+        prune_missing: bool = True,
     ) -> None:
         self._store = QdrantStore(
             url=qdrant_url,
@@ -77,6 +78,7 @@ class QdrantIndexer:
         salt = getattr(self._payload_builder, "hash_salt", None)
         if callable(salt):
             self._hash_salt = str(salt() or "")
+        self._prune_missing = prune_missing
 
     @property
     def _client(self):
@@ -109,23 +111,28 @@ class QdrantIndexer:
             allowed_extensions=self._allowed_extensions or None,
         )
         logger.info(
-            "Qdrant reindex start path=%s files=%s collection=%s extensions=%s",
+            "Qdrant reindex start path=%s files=%s collection=%s "
+            "prune_missing=%s extensions=%s",
             watch_path,
             len(files),
             self._collection,
+            self._prune_missing,
             sorted(self._allowed_extensions) if self._allowed_extensions else ["*"],
         )
 
         disk_hashes = self._disk_file_hashes(watch_path)
         if not disk_hashes:
-            indexed_paths = self._store.scroll_indexed_paths()
             removed = 0
-            for relative in indexed_paths:
-                self._store.delete_source(relative)
-                removed += 1
+            if self._prune_missing:
+                indexed_paths = self._store.scroll_indexed_paths()
+                for relative in indexed_paths:
+                    self._store.delete_source(relative)
+                    removed += 1
             logger.info(
-                "Qdrant reindex done collection=%s empty watch_path removed=%s",
+                "Qdrant reindex done collection=%s empty watch_path "
+                "prune_missing=%s removed=%s",
                 self._collection,
+                self._prune_missing,
                 removed,
             )
             return
@@ -147,10 +154,11 @@ class QdrantIndexer:
             self._upsert_file(watch_path, relative, force=True)
             upserted += 1
 
-        for relative in indexed_paths:
-            if relative not in disk_hashes:
-                self._store.delete_source(relative)
-                stale_removed += 1
+        if self._prune_missing:
+            for relative in indexed_paths:
+                if relative not in disk_hashes:
+                    self._store.delete_source(relative)
+                    stale_removed += 1
 
         logger.info(
             "Qdrant reindex done collection=%s skipped=%s upserted=%s "

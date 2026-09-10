@@ -386,6 +386,64 @@ def test_reindex_removes_stale_qdrant_paths(tmp_path: Path) -> None:
     assert delete_filter.match.value == "gone.md"
 
 
+def test_reindex_keeps_stale_qdrant_paths_when_prune_missing_disabled(
+    tmp_path: Path,
+) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "keep.md").write_text("keep", encoding="utf-8")
+
+    stale = MagicMock(payload={"source_path": "gone.md", "file_hash": "dead"})
+    client = _mock_client(exists=True)
+    client.scroll.side_effect = [
+        ([stale], None),
+        ([], None),
+    ]
+
+    indexer = QdrantIndexer(
+        qdrant_url="http://127.0.0.1:6333",
+        collection="docs",
+        embedder=FakeEmbedder(),
+        document_reader=FakeReader(),
+        prune_missing=False,
+    )
+    indexer._client = client
+    indexer.index(str(docs))
+
+    deleted = [
+        call.kwargs["points_selector"].filter.must[0].match.value
+        for call in client.delete.call_args_list
+    ]
+    assert "gone.md" not in deleted
+    client.delete_collection.assert_not_called()
+    assert client.upsert.called
+
+
+def test_reindex_empty_path_keeps_collection_when_prune_missing_disabled(
+    tmp_path: Path,
+) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+
+    stale = MagicMock(payload={"source_path": "gone.md", "file_hash": "dead"})
+    client = _mock_client(exists=True)
+    client.scroll.return_value = ([stale], None)
+
+    indexer = QdrantIndexer(
+        qdrant_url="http://127.0.0.1:6333",
+        collection="docs",
+        embedder=FakeEmbedder(),
+        document_reader=FakeReader(),
+        prune_missing=False,
+    )
+    indexer._client = client
+    indexer.index(str(docs))
+
+    client.delete.assert_not_called()
+    client.delete_collection.assert_not_called()
+    client.upsert.assert_not_called()
+
+
 def test_ollama_embedder_posts_prompt(monkeypatch) -> None:
     captured: dict = {}
 

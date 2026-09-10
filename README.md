@@ -114,6 +114,7 @@ hr = DocumentIndexer(ProfileSmb(
 | `QDRANT__PAYLOAD_INDEXES` | keyword-индексы (через запятую); пусто = индексы builder’а | builder |
 | `QDRANT__DISTANCE` | cosine / dot / euclid | `cosine` |
 | `QDRANT__INDEX_VERSION` | версия алгоритма в hash/payload; пусто = `table-aware-v2`, `hybrid-v3` или `resume-v20` | пусто |
+| `QDRANT__PRUNE_MISSING` | удалять из коллекции `source_path`, которых нет в текущем источнике; `false` — дописать новую папку в ту же коллекцию | `true` |
 | `MODELS__OLLAMA_BASE_URL` | embeddings, VLM, extraction LLM | `http://127.0.0.1:11434` |
 | `MODELS__EMBEDDING_MODEL` | модель эмбеддингов | `nomic-embed-text` |
 | `MODELS__EXTRACTION_MODEL` | text LLM для резюме (`/api/chat`, structured output) | пусто = только парсер, без LLM |

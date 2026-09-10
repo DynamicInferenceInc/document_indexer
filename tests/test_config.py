@@ -24,6 +24,7 @@ def test_default_local_profile_matches_original_models() -> None:
     assert settings.qdrant.url == "http://127.0.0.1:6333"
     assert settings.qdrant.collection == "docs"
     assert settings.qdrant.timeout_sec == 120.0
+    assert settings.qdrant.prune_missing is True
     assert settings.models.embedding_model == "nomic-embed-text"
     assert settings.models.extraction_model == ""
     assert settings.models.chunk_size == 1024
@@ -85,6 +86,12 @@ def test_nested_env(monkeypatch) -> None:
     assert settings.chunking.strategy == "resume_project"
     assert settings.chunking.window_chars == 800
     assert settings.chunking.window_overlap == 80
+
+
+def test_qdrant_prune_missing_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("QDRANT__PRUNE_MISSING", "false")
+    settings = IndexerSettings(_env_file=None)
+    assert settings.qdrant.prune_missing is False
 
 
 def test_resume_and_extraction_defaults_target_dgx_spark() -> None:

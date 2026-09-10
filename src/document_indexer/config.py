@@ -93,6 +93,26 @@ class QdrantSettings(BaseModel):
     payload_indexes: list[str] | None = None
     distance: Literal["cosine", "dot", "euclid"] = "cosine"
     index_version: str = ""
+    prune_missing: bool = Field(
+        default=True,
+        description=(
+            "Delete Qdrant points whose source_path is not in the current source. "
+            "Set false to append a new folder into the same collection."
+        ),
+    )
+
+    @field_validator("prune_missing", mode="before")
+    @classmethod
+    def _parse_prune_missing(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return True
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+        return value
 
     @field_validator("extra_payload", mode="before")
     @classmethod
