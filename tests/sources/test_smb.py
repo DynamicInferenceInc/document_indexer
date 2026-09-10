@@ -271,6 +271,31 @@ def test_smb_max_depth_one_copies_only_one_folder_level(tmp_path: Path) -> None:
     assert "Alpha/docs/deep.md" not in remote.downloads
 
 
+def test_smb_include_copies_only_listed_files(tmp_path: Path) -> None:
+    remote = FakeRemote()
+    remote.put("keep.pptx", b"keep")
+    remote.put("skip.pptx", b"skip")
+    remote.put("Архив/old.pptx", b"old")
+    settings = SmbSourceSettings(
+        server="fileserver",
+        share="docs",
+        username="svc",
+        password="secret",
+        staging_path=str(tmp_path / "staging"),
+        include=["keep.pptx"],
+    )
+    source = SmbStagingSource(
+        settings,
+        remote=remote,
+        allowed_extensions={".pptx"},
+    )
+    root = source.prepare()
+    assert (root / "keep.pptx").read_bytes() == b"keep"
+    assert not (root / "skip.pptx").exists()
+    assert not (root / "Архив" / "old.pptx").exists()
+    assert remote.downloads == ["keep.pptx"]
+
+
 @pytest.mark.smb_integration
 @pytest.mark.skipif(
     os.environ.get("DOCUMENT_INDEXER_SMB_TEST") != "1",

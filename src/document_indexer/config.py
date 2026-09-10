@@ -81,6 +81,42 @@ class SourceDirectionMixin(BaseModel):
         return parse_direction_map(value)
 
 
+class SourceIncludeMixin(BaseModel):
+    """Optional filename allowlist relative to the source root."""
+
+    include: list[str] = Field(
+        default_factory=list,
+        description=(
+            "If set, only these filenames or relative paths are copied and indexed. "
+            "Empty = every file that matches INDEX_EXTENSIONS."
+        ),
+    )
+
+    @field_validator("include", mode="before")
+    @classmethod
+    def _parse_include(cls, value: Any) -> list[str]:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            if text.startswith("["):
+                loaded = json.loads(text)
+                if not isinstance(loaded, list):
+                    raise ValueError("SOURCE__INCLUDE JSON must be an array of names")
+                value = loaded
+            else:
+                value = [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, list):
+            return [
+                str(item).replace("\\", "/").strip().strip("/")
+                for item in value
+                if str(item).strip()
+            ]
+        raise ValueError("SOURCE__INCLUDE must be a comma-separated list or JSON array")
+
+
 class QdrantSettings(BaseModel):
     """Connection to one Qdrant instance and collection."""
 
@@ -181,7 +217,7 @@ class ResumeSettings(BaseModel):
     section_overlap_chars: int = 2_000
 
 
-class LocalSourceSettings(SourceDirectionMixin):
+class LocalSourceSettings(SourceDirectionMixin, SourceIncludeMixin):
     """Watch a local directory with inotify/watchdog events."""
 
     model_config = ConfigDict(extra="forbid")
@@ -191,7 +227,7 @@ class LocalSourceSettings(SourceDirectionMixin):
     debounce_seconds: float = 1.0
 
 
-class SmbSourceSettings(SourceDirectionMixin):
+class SmbSourceSettings(SourceDirectionMixin, SourceIncludeMixin):
     """Poll an SMB share and mirror it into a local staging directory."""
 
     model_config = ConfigDict(extra="forbid")

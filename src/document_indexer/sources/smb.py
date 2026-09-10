@@ -14,6 +14,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from document_indexer.config import SmbSourceSettings
 from document_indexer.domain.changes import FsChange
+from document_indexer.domain.documents import path_is_included
 from document_indexer.domain.formats import SUPPORTED_SUFFIXES
 from document_indexer.sources.base import ChangeCallback
 
@@ -246,11 +247,13 @@ class SmbStagingSource:
         )
         self._thread.start()
         logger.info(
-            "SMB poller started server=%s share=%s subpath=%s max_depth=%s staging=%s interval=%ss",
+            "SMB poller started server=%s share=%s subpath=%s max_depth=%s "
+            "include=%s staging=%s interval=%ss",
             self._settings.server,
             self._settings.share,
             self._settings.subpath or "/",
             self._settings.max_depth,
+            list(self._settings.include) or ["*"],
             self._settings.staging_path,
             self._settings.poll_interval_sec,
         )
@@ -283,7 +286,11 @@ class SmbStagingSource:
             changes.append(FsChange("upsert", relative))
 
         for relative in list(self._mirrored):
-            if relative in remote_files:
+            if (
+                relative in remote_files
+                and relative_within_depth(relative, self._settings.max_depth)
+                and self._is_indexable(relative)
+            ):
                 continue
             dest = staging / relative
             if dest.is_file():
@@ -353,6 +360,8 @@ class SmbStagingSource:
     def _is_indexable(self, relative: str) -> bool:
         path = Path(relative)
         if path.name.startswith("."):
+            return False
+        if not path_is_included(relative, self._settings.include):
             return False
         return path.suffix.lower() in self._allowed
 

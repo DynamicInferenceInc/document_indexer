@@ -23,7 +23,7 @@ from document_indexer.adapters.qdrant.payload import (
 )
 from document_indexer.adapters.qdrant.store import QdrantStore
 from document_indexer.domain.changes import FsChange
-from document_indexer.domain.documents import iter_document_files
+from document_indexer.domain.documents import iter_document_files, path_is_included
 from document_indexer.ports import DocumentReader, Embedder
 from document_indexer.ports.enricher import DocumentEnricher
 from document_indexer.table_aware.chunker import is_useful_chunk_text
@@ -54,6 +54,7 @@ class QdrantIndexer:
         index_version: str = DEFAULT_INDEX_VERSION,
         timeout_sec: float = 120.0,
         prune_missing: bool = True,
+        include: Sequence[str] | None = None,
     ) -> None:
         self._store = QdrantStore(
             url=qdrant_url,
@@ -79,6 +80,11 @@ class QdrantIndexer:
         if callable(salt):
             self._hash_salt = str(salt() or "")
         self._prune_missing = prune_missing
+        self._include = tuple(
+            str(item).replace("\\", "/").strip().strip("/")
+            for item in (include or ())
+            if str(item).strip()
+        )
 
     @property
     def _client(self):
@@ -109,14 +115,16 @@ class QdrantIndexer:
         files = iter_document_files(
             root,
             allowed_extensions=self._allowed_extensions or None,
+            include=self._include or None,
         )
         logger.info(
             "Qdrant reindex start path=%s files=%s collection=%s "
-            "prune_missing=%s extensions=%s",
+            "prune_missing=%s include=%s extensions=%s",
             watch_path,
             len(files),
             self._collection,
             self._prune_missing,
+            list(self._include) or ["*"],
             sorted(self._allowed_extensions) if self._allowed_extensions else ["*"],
         )
 
@@ -436,6 +444,7 @@ class QdrantIndexer:
         for path in iter_document_files(
             root,
             allowed_extensions=self._allowed_extensions or None,
+            include=self._include or None,
         ):
             relative = path.relative_to(root).as_posix()
             hashes[relative] = file_content_hash(
@@ -469,6 +478,8 @@ class QdrantIndexer:
     def _is_indexable_relative(self, relative: str) -> bool:
         path = Path(relative)
         if path.name.startswith("."):
+            return False
+        if not path_is_included(relative, self._include):
             return False
         suffix = path.suffix.lower()
         allowed = self._allowed_extensions

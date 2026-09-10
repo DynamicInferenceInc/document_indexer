@@ -159,6 +159,23 @@ def test_source_direction_from_env(monkeypatch) -> None:
     }
 
 
+def test_source_include_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("SOURCE__KIND", "smb")
+    monkeypatch.setenv("SOURCE__SERVER", "pers.local")
+    monkeypatch.setenv("SOURCE__SHARE", "common")
+    monkeypatch.setenv("SOURCE__USERNAME", "svc")
+    monkeypatch.setenv("SOURCE__PASSWORD", "secret")
+    monkeypatch.setenv(
+        "SOURCE__INCLUDE",
+        '["GAP 2086 Продажа прослеживаемых ТМЦ.pptx","Учет прослеживаемых ТМЦ.pptx"]',
+    )
+    settings = IndexerSettings(_env_file=None)
+    assert settings.source.include == [
+        "GAP 2086 Продажа прослеживаемых ТМЦ.pptx",
+        "Учет прослеживаемых ТМЦ.pptx",
+    ]
+
+
 def test_smb_empty_max_depth_is_unlimited(monkeypatch) -> None:
     monkeypatch.setenv("SOURCE__KIND", "smb")
     monkeypatch.setenv("SOURCE__SERVER", "pers.local")

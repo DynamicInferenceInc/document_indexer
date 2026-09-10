@@ -242,12 +242,13 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
     document_chunker, hybrid, tokenizer, payload_builder, enricher = _build_profile(settings)
     logger.info(
         "Chunking strategy=%s window_chars=%s window_overlap=%s "
-        "direction=%s direction_map=%s",
+        "direction=%s direction_map=%s include=%s",
         chunking.strategy,
         chunking.window_chars,
         chunking.window_overlap,
         getattr(settings.source, "direction", "") or "-",
         list(getattr(settings.source, "direction_map", {}) or {}),
+        list(getattr(settings.source, "include", []) or []) or ["*"],
     )
     reader = DoclingDocumentReader(
         DocumentConverter(format_options=picture.format_options()),
@@ -278,6 +279,7 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
         index_version=index_version,
         timeout_sec=settings.qdrant.timeout_sec,
         prune_missing=settings.qdrant.prune_missing,
+        include=getattr(settings.source, "include", None),
     )
 
 

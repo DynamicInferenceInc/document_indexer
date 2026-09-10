@@ -8,6 +8,21 @@ from pathlib import Path
 from document_indexer.domain.formats import SUPPORTED_SUFFIXES
 
 
+def path_is_included(relative: str, include: Iterable[str] | None) -> bool:
+    """True if ``relative`` is allowed. Empty include means every path."""
+    allowed = [
+        str(item).replace("\\", "/").strip().strip("/")
+        for item in (include or [])
+        if str(item).strip()
+    ]
+    if not allowed:
+        return True
+    normalized = relative.replace("\\", "/").strip("/")
+    name = normalized.rsplit("/", 1)[-1]
+    wanted = {item.casefold() for item in allowed}
+    return normalized.casefold() in wanted or name.casefold() in wanted
+
+
 def parse_index_extensions(raw: str | None) -> frozenset[str]:
     """Parse comma/space-separated extensions into a normalized ``.ext`` set."""
     if raw is None:
@@ -51,6 +66,7 @@ def iter_document_files(
     watch_path: str | Path,
     *,
     allowed_extensions: Iterable[str] | None = None,
+    include: Iterable[str] | None = None,
 ) -> list[Path]:
     """List files under ``watch_path`` whose suffix is in ``allowed_extensions``."""
     if allowed_extensions is None:
@@ -69,6 +85,9 @@ def iter_document_files(
             continue
         if path.name.startswith("."):
             continue
-        if path.suffix.lower() in allowed:
+        if path.suffix.lower() not in allowed:
+            continue
+        relative = path.relative_to(root).as_posix()
+        if path_is_included(relative, include):
             files.append(path)
     return files

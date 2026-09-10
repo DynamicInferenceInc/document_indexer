@@ -291,6 +291,27 @@ def test_qdrant_indexer_skips_disallowed_extensions(tmp_path: Path) -> None:
     assert sources == {"guide.md"}
 
 
+def test_qdrant_indexer_include_indexes_only_listed_files(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "keep.md").write_text("keep text " * 10, encoding="utf-8")
+    (docs / "skip.md").write_text("skip text " * 10, encoding="utf-8")
+
+    client = _mock_client(exists=False)
+    indexer = QdrantIndexer(
+        qdrant_url="http://127.0.0.1:6333",
+        collection="docs",
+        embedder=FakeEmbedder(),
+        document_reader=FakeReader(),
+        include=["keep.md"],
+    )
+    indexer._client = client
+    indexer.index(str(docs))
+
+    points = client.upsert.call_args.kwargs["points"]
+    assert {point.payload["source_path"] for point in points} == {"keep.md"}
+
+
 def test_qdrant_indexer_skips_empty_reader_result(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()

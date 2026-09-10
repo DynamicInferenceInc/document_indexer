@@ -6,6 +6,7 @@ from document_indexer.config import IndexerSettings
 from document_indexer.domain.documents import (
     iter_document_files,
     parse_index_extensions,
+    path_is_included,
     resolve_index_extensions,
 )
 from document_indexer.domain.formats import SUPPORTED_SUFFIXES
@@ -40,3 +41,23 @@ def test_iter_document_files_filters_by_extension(tmp_path: Path) -> None:
     files = iter_document_files(tmp_path, allowed_extensions={".md", ".pdf"})
     names = {path.name for path in files}
     assert names == {"a.md", "c.pdf"}
+
+
+def test_path_is_included_matches_basename_or_relative() -> None:
+    assert path_is_included("a.pptx", None) is True
+    assert path_is_included("a.pptx", []) is True
+    assert path_is_included("GAP 2086.pptx", ["GAP 2086.pptx"]) is True
+    assert path_is_included("Архив/a.pptx", ["GAP 2086.pptx"]) is False
+    assert path_is_included("Архив/a.pptx", ["a.pptx"]) is True
+    assert path_is_included("Архив/a.pptx", ["Архив/a.pptx"]) is True
+
+
+def test_iter_document_files_respects_include(tmp_path: Path) -> None:
+    (tmp_path / "keep.pptx").write_bytes(b"PK")
+    (tmp_path / "skip.pptx").write_bytes(b"PK")
+    files = iter_document_files(
+        tmp_path,
+        allowed_extensions={".pptx"},
+        include=["keep.pptx"],
+    )
+    assert [path.name for path in files] == ["keep.pptx"]
