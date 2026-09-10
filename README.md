@@ -101,6 +101,8 @@ hr = DocumentIndexer(ProfileSmb(
 | `SOURCE__USERNAME` / `SOURCE__PASSWORD` / `SOURCE__DOMAIN` | учётная запись | — |
 | `SOURCE__SUBPATH` | каталог внутри шары | пусто (корень шары) |
 | `SOURCE__MAX_DEPTH` | сколько уровней папок копировать с шары; `1` = файлы в пути + одна вложенная папка; пусто = всё дерево | пусто |
+| `SOURCE__DIRECTION` | одно направление на все файлы профиля; пусто = имя родительской папки | пусто |
+| `SOURCE__DIRECTION_MAP` | ручные метки: JSON `{"путь":"метка"}` (в .env) или `файл.docx=метка;папка=метка` в коде | `{}` |
 | `SOURCE__STAGING_PATH` | локальное зеркало | `/var/lib/document-indexer/staging` |
 | `SOURCE__PORT` | порт SMB | `445` |
 | `SOURCE__TIMEOUT_SEC` | таймаут сессии | `30` |
@@ -172,9 +174,11 @@ Payload точек по умолчанию не менялся: `source_path`, `
 
 `CHUNKING__STRATEGY` выбирает один из встроенных режимов.
 
-**table_aware** (по умолчанию). Docling HybridChunker + постобработка таблиц: одна таблица — один чанк. Payload: `text`, `headings`, `chunk_type`, поля таблиц, `direction` (имя родительской папки файла). Версия `table-aware-v2`.
+**table_aware** (по умолчанию). Docling HybridChunker + постобработка таблиц: одна таблица — один чанк. Payload: `text`, `headings`, `chunk_type`, поля таблиц, `direction`. Версия `table-aware-v2`.
 
-**hybrid**. Как режет официальный Docling `HybridChunker`, без table-aware постобработки. Лимит токенов — `MODELS__CHUNK_SIZE` (по умолчанию 1024; дефолт Docling 256 слишком мал для длинных заголовков). Картинки на convert-этапе идут в VLM (`MODELS__PICTURE_DESCRIPTION_ENABLED=true`), описания попадают в текст чанка. Payload как у table_aware (`text`, `headings`, `chunk_type=prose`) плюс `direction` — имя папки, в которой лежит файл (`Проекты/Бухгалтерия/акт.docx` → `Бухгалтерия`). Версия `hybrid-v3`.
+**hybrid**. Как режет официальный Docling `HybridChunker`, без table-aware постобработки. Лимит токенов — `MODELS__CHUNK_SIZE` (по умолчанию 1024; дефолт Docling 256 слишком мал для длинных заголовков). Картинки на convert-этапе идут в VLM (`MODELS__PICTURE_DESCRIPTION_ENABLED=true`), описания попадают в текст чанка. Payload как у table_aware (`text`, `headings`, `chunk_type=prose`) плюс `direction`. Версия `hybrid-v3`.
+
+`direction` задаётся так: точный путь в `SOURCE__DIRECTION_MAP`, иначе самый длинный префикс папки в карте, иначе `SOURCE__DIRECTION` на весь профиль, иначе имя родительской папки (`Проекты/Бухгалтерия/акт.docx` → `Бухгалтерия`). Смена меток входит в hash файла — коллекция переиндексирует затронутые документы без bump версии.
 
 **resume_project**. Один проект — один чанк (`chunk_type=project`). На каждой точке лежат `candidate_name` и `candidate_position` из шапки (ФИО может быть без подписи). Строки-заголовки таблицы и неполные копии того же проекта отбрасываются. Пример CV: `resume/sample.md`.
 

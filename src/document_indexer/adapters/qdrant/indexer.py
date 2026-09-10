@@ -73,6 +73,10 @@ class QdrantIndexer:
             else tuple(self._payload_builder.payload_indexes())
         )
         self._index_version = index_version
+        self._hash_salt = ""
+        salt = getattr(self._payload_builder, "hash_salt", None)
+        if callable(salt):
+            self._hash_salt = str(salt() or "")
 
     @property
     def _client(self):
@@ -210,7 +214,11 @@ class QdrantIndexer:
             self._store.delete_source(relative)
             return
 
-        content_hash = file_content_hash(path, index_version=self._index_version)
+        content_hash = file_content_hash(
+            path,
+            index_version=self._index_version,
+            extra=self._hash_salt,
+        )
         if not force:
             disk_hashes = self._disk_file_hashes(watch_path)
             canonical = _canonical_paths(disk_hashes).get(content_hash)
@@ -422,7 +430,11 @@ class QdrantIndexer:
             allowed_extensions=self._allowed_extensions or None,
         ):
             relative = path.relative_to(root).as_posix()
-            hashes[relative] = file_content_hash(path, index_version=self._index_version)
+            hashes[relative] = file_content_hash(
+                path,
+                index_version=self._index_version,
+                extra=self._hash_salt,
+            )
         return hashes
 
     def _log_resume_project_stats(self, watch_path: str) -> None:
@@ -488,11 +500,15 @@ def file_content_hash(
     path: Path,
     *,
     index_version: str = _INDEX_VERSION,
+    extra: str = "",
 ) -> str:
-    """SHA-256 of file bytes and the indexing algorithm version."""
+    """SHA-256 of file bytes, the indexing algorithm version, and optional salt."""
     digest = hashlib.sha256()
     digest.update(index_version.encode("utf-8"))
     digest.update(b"\0")
+    if extra:
+        digest.update(extra.encode("utf-8"))
+        digest.update(b"\0")
     with path.open("rb") as handle:
         while chunk := handle.read(_HASH_CHUNK_SIZE):
             digest.update(chunk)

@@ -241,10 +241,13 @@ def build_indexer(settings: IndexerSettings) -> Indexer:
     )
     document_chunker, hybrid, tokenizer, payload_builder, enricher = _build_profile(settings)
     logger.info(
-        "Chunking strategy=%s window_chars=%s window_overlap=%s",
+        "Chunking strategy=%s window_chars=%s window_overlap=%s "
+        "direction=%s direction_map=%s",
         chunking.strategy,
         chunking.window_chars,
         chunking.window_overlap,
+        getattr(settings.source, "direction", "") or "-",
+        list(getattr(settings.source, "direction_map", {}) or {}),
     )
     reader = DoclingDocumentReader(
         DocumentConverter(format_options=picture.format_options()),
@@ -305,7 +308,7 @@ def _build_profile(
             settings.models.chunk_size,
             HYBRID_INDEX_VERSION,
         )
-        return HybridDocumentChunker(chunker=hybrid), hybrid, tokenizer, DefaultPayloadBuilder(), None
+        return HybridDocumentChunker(chunker=hybrid), hybrid, tokenizer, _document_payload_builder(settings), None
 
     tokenizer = tokenizer_with_max_tokens(settings.models.chunk_size)
     hybrid = HybridChunker(
@@ -323,8 +326,15 @@ def _build_profile(
         ),
         hybrid,
         tokenizer,
-        DefaultPayloadBuilder(),
+        _document_payload_builder(settings),
         None,
+    )
+
+
+def _document_payload_builder(settings: IndexerSettings) -> DefaultPayloadBuilder:
+    return DefaultPayloadBuilder(
+        default_direction=getattr(settings.source, "direction", "") or "",
+        direction_map=getattr(settings.source, "direction_map", None),
     )
 
 

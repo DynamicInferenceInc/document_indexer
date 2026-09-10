@@ -133,6 +133,25 @@ def test_smb_max_depth_from_env(monkeypatch) -> None:
     assert settings.chunking.strategy == "hybrid"
 
 
+def test_source_direction_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("SOURCE__KIND", "smb")
+    monkeypatch.setenv("SOURCE__SERVER", "pers.local")
+    monkeypatch.setenv("SOURCE__SHARE", "common")
+    monkeypatch.setenv("SOURCE__USERNAME", "svc")
+    monkeypatch.setenv("SOURCE__PASSWORD", "secret")
+    monkeypatch.setenv("SOURCE__DIRECTION", "JTI")
+    monkeypatch.setenv(
+        "SOURCE__DIRECTION_MAP",
+        '{"Казначейство/акт.docx":"Оплата","HR":"Кадры"}',
+    )
+    settings = IndexerSettings(_env_file=None)
+    assert settings.source.direction == "JTI"
+    assert settings.source.direction_map == {
+        "Казначейство/акт.docx": "Оплата",
+        "HR": "Кадры",
+    }
+
+
 def test_smb_empty_max_depth_is_unlimited(monkeypatch) -> None:
     monkeypatch.setenv("SOURCE__KIND", "smb")
     monkeypatch.setenv("SOURCE__SERVER", "pers.local")
@@ -142,6 +161,15 @@ def test_smb_empty_max_depth_is_unlimited(monkeypatch) -> None:
     monkeypatch.setenv("SOURCE__MAX_DEPTH", "")
     settings = IndexerSettings(_env_file=None)
     assert settings.source.max_depth is None
+
+
+def test_parse_direction_map_semicolon_pairs() -> None:
+    from document_indexer.config import parse_direction_map
+
+    assert parse_direction_map("Казначейство/акт.docx=Оплата;HR=Кадры") == {
+        "Казначейство/акт.docx": "Оплата",
+        "HR": "Кадры",
+    }
 
 
 def test_unknown_chunking_strategy_is_rejected() -> None:

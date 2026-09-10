@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from document_indexer.infra.embeddings import OllamaEmbedder
+from document_indexer.adapters.qdrant.payload import DefaultPayloadBuilder
 from document_indexer.adapters.qdrant_indexer import (
     QdrantIndexer,
     file_content_hash,
@@ -92,6 +93,27 @@ def test_qdrant_indexer_sets_direction_from_parent_folder(tmp_path: Path) -> Non
     points = client.upsert.call_args.kwargs["points"]
     assert points[0].payload["source_path"] == "Бухгалтерия/акт.md"
     assert points[0].payload["direction"] == "Бухгалтерия"
+
+
+def test_qdrant_indexer_uses_payload_builder_direction(tmp_path: Path) -> None:
+    docs = tmp_path / "docs"
+    folder = docs / "Казначейство"
+    folder.mkdir(parents=True)
+    (folder / "акт.md").write_text("заявка на оплату\n" * 3, encoding="utf-8")
+
+    client = _mock_client(exists=False)
+    indexer = QdrantIndexer(
+        qdrant_url="http://127.0.0.1:6333",
+        collection="docs",
+        embedder=FakeEmbedder(),
+        document_reader=FakeReader(),
+        payload_builder=DefaultPayloadBuilder(default_direction="JTI"),
+    )
+    indexer._client = client
+    indexer.index(str(docs))
+
+    points = client.upsert.call_args.kwargs["points"]
+    assert points[0].payload["direction"] == "JTI"
 
 
 def test_collect_resume_report_groups_by_source() -> None:

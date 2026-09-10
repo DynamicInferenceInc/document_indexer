@@ -11,6 +11,76 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from document_indexer.domain.documents import resolve_index_extensions
 
 
+def parse_direction_map(value: Any) -> dict[str, str]:
+    """Parse JSON object or ``path=direction;folder=direction`` pairs."""
+    if value is None or value == "":
+        return {}
+    if isinstance(value, dict):
+        parsed: dict[str, str] = {}
+        for key, label in value.items():
+            path = str(key).replace("\\", "/").strip().strip("/")
+            dest = str(label).strip()
+            if path and dest:
+                parsed[path] = dest
+        return parsed
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        if text.startswith("{"):
+            loaded = json.loads(text)
+            if not isinstance(loaded, dict):
+                raise ValueError("DIRECTION_MAP JSON must be an object")
+            return parse_direction_map(loaded)
+        mapping: dict[str, str] = {}
+        for part in text.split(";"):
+            item = part.strip()
+            if not item:
+                continue
+            if "=" not in item:
+                raise ValueError(
+                    "SOURCE__DIRECTION_MAP items must be path=direction, separated by ;"
+                )
+            path, dest = item.split("=", 1)
+            path = path.replace("\\", "/").strip().strip("/")
+            dest = dest.strip()
+            if path and dest:
+                mapping[path] = dest
+        return mapping
+    raise ValueError("SOURCE__DIRECTION_MAP must be a JSON object or path=direction pairs")
+
+
+class SourceDirectionMixin(BaseModel):
+    """Optional direction labels for Qdrant payload."""
+
+    direction: str = Field(
+        default="",
+        description=(
+            "If set, every file in this profile gets this payload.direction. "
+            "Empty keeps the parent-folder name."
+        ),
+    )
+    direction_map: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Relative path or folder prefix → direction. Exact file wins, then the "
+            "longest folder prefix, then SOURCE__DIRECTION, then parent folder."
+        ),
+    )
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def _empty_direction_is_blank(cls, value: Any) -> Any:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return ""
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("direction_map", mode="before")
+    @classmethod
+    def _parse_direction_map(cls, value: Any) -> dict[str, str]:
+        return parse_direction_map(value)
+
+
 class QdrantSettings(BaseModel):
     """Connection to one Qdrant instance and collection."""
 
@@ -91,7 +161,7 @@ class ResumeSettings(BaseModel):
     section_overlap_chars: int = 2_000
 
 
-class LocalSourceSettings(BaseModel):
+class LocalSourceSettings(SourceDirectionMixin):
     """Watch a local directory with inotify/watchdog events."""
 
     model_config = ConfigDict(extra="forbid")
@@ -101,7 +171,7 @@ class LocalSourceSettings(BaseModel):
     debounce_seconds: float = 1.0
 
 
-class SmbSourceSettings(BaseModel):
+class SmbSourceSettings(SourceDirectionMixin):
     """Poll an SMB share and mirror it into a local staging directory."""
 
     model_config = ConfigDict(extra="forbid")

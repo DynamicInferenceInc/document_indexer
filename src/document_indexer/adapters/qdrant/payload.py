@@ -54,6 +54,19 @@ class PayloadBuilder(Protocol):
 class DefaultPayloadBuilder:
     """Current table-aware-v2 payload: text, headings, table fields."""
 
+    def __init__(
+        self,
+        *,
+        default_direction: str = "",
+        direction_map: Mapping[str, str] | None = None,
+    ) -> None:
+        self._default_direction = default_direction.strip()
+        self._direction_map = {
+            str(key).replace("\\", "/").strip("/"): str(label).strip()
+            for key, label in (direction_map or {}).items()
+            if str(key).strip() and str(label).strip()
+        }
+
     def build(self, record: IndexRecord) -> dict[str, Any]:
         chunk = record.chunk
         payload: dict[str, Any] = {
@@ -66,7 +79,11 @@ class DefaultPayloadBuilder:
             payload["table_ref"] = chunk.table_ref
         if chunk.row_count:
             payload["row_count"] = chunk.row_count
-        direction = direction_from_source_path(record.source_path)
+        direction = resolve_direction(
+            record.source_path,
+            default=self._default_direction,
+            mapping=self._direction_map,
+        )
         if direction:
             payload["direction"] = direction
         payload.update(record.document_fields)
@@ -74,6 +91,13 @@ class DefaultPayloadBuilder:
 
     def payload_indexes(self) -> Sequence[str]:
         return DEFAULT_PAYLOAD_INDEXES
+
+    def hash_salt(self) -> str:
+        """Include direction config in the file hash so label changes reindex."""
+        parts = [self._default_direction]
+        for key in sorted(self._direction_map):
+            parts.append(f"{key}={self._direction_map[key]}")
+        return "\n".join(parts)
 
 
 def direction_from_source_path(source_path: str) -> str:
@@ -90,6 +114,34 @@ def direction_from_source_path(source_path: str) -> str:
     if not name or name == ".":
         return ""
     return name
+
+
+def resolve_direction(
+    source_path: str,
+    *,
+    default: str = "",
+    mapping: Mapping[str, str] | None = None,
+) -> str:
+    """Manual map (exact file, then longest folder prefix), else default, else parent folder."""
+    normalized = source_path.replace("\\", "/").strip("/")
+    mapping = mapping or {}
+    if normalized in mapping:
+        return mapping[normalized]
+    best_key = ""
+    best_value = ""
+    for key, label in mapping.items():
+        prefix = str(key).replace("\\", "/").strip("/")
+        if not prefix or not str(label).strip():
+            continue
+        if normalized == prefix or normalized.startswith(f"{prefix}/"):
+            if len(prefix) >= len(best_key):
+                best_key = prefix
+                best_value = str(label).strip()
+    if best_value:
+        return best_value
+    if default.strip():
+        return default.strip()
+    return direction_from_source_path(normalized)
 
 
 def merge_payload(
